@@ -1,4 +1,5 @@
 import torchvision.transforms as transforms
+import torch.nn as nn
 
 
 def get_default_img_transforms(input_shape, n_channel=3, s=1):
@@ -56,3 +57,11 @@ def multiview_dataset_wrapper(transforms, n_view=2, keep_original=False):
         return _multiview_dataset_wrapper
 
     return _wrapper
+
+class Augmentation(nn.Module):
+    def __init__(self, transforms, n_view=2):
+        super(Augmentation, self).__init__()
+        self.transform = nn.Sequential(*transforms)
+        self.n_view = n_view
+    def forward(self, x):
+        return [self.transform(x) for _ in range(self.n_view)]
