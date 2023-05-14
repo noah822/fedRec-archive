@@ -2,6 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import copy
+from tqdm.notebook import tqdm, trange
+from torch.utils.tensorboard import SummaryWriter
+
+from ._utils import (
+    _remove_component
+)
 
 class BYOL:
     def __init__(self,
@@ -34,11 +40,12 @@ class BYOL:
         '''
         if prune_backbone:
             assert head_layer_name is not None
-            backbone = BYOL._remove_classifier(backbone, head_layer_name)
+            backbone = _remove_component(backbone, head_layer_name)
+        
         if user_proj:
             assert proj_hidden_dim is not None and proj_dim is not None
             projection = self._make_mlp(
-                inplanes, proj_hidden_dim, 
+                inplanes, proj_hidden_dim, proj_dim
             )
             online_network = nn.Sequential(
                 backbone, projection
@@ -51,16 +58,11 @@ class BYOL:
         self.target_network = copy.deepcopy(online_network).to(device)
         self.predictor = self._make_mlp(
             proj_dim, pred_hidden_dim, proj_dim, use_1d_bn
-        )
+        ).to(device)
         
         self.epsilon = epsilon
         self.device = device
         
-        
-    @staticmethod
-    def _remove_classifier(model, layer_name):
-        setattr(model, layer_name, nn.Identity())
-        return model
         
     def _make_mlp(self, in_dim, hidden_dim, out_dim, use_1d_bn=True):
         if use_1d_bn:
@@ -92,24 +94,68 @@ class BYOL:
         return 2 - 2 * (x * y).sum(dim=-1)
     
         
-    def train(self, dataloader, optimizer, optimizer_config, n_epoch):
+    def train(
+            self, augmentation, dataloader,
+            optimizer, optimizer_config,
+            scheduler, scheduler_config,
+            n_epoch,
+            save_path,
+            use_tqdm=False,
+            use_tensorboard=False,
+            tensorboard_path=None
+        ):
+        
+        writer = None
+        if use_tensorboard:
+            assert tensorboard_path is not None
+            writer = SummaryWriter(log_dir=tensorboard_path)
         _optimizer = optimizer(
             list(self.online_network.parameters()) + list(self.predictor.parameters()),
             **optimizer_config
         )
+        _scheduler = scheduler(
+            _optimizer, 
+            **scheduler_config
+        )
         
         self.optimizer = _optimizer
         
+        epoch_iterator = range(n_epoch)
+        if use_tqdm:
+            epoch_iterator = trange(n_epoch)
         
-        for _ in range(n_epoch):
-            for (view1, view2) in dataloader:
-                view1 = view1.to(self.device); view2 = view2.to(self.device)
+        
+        for epoch in epoch_iterator:
+            running_loss = .0
+            data_iterator = dataloader
+            if use_tqdm:
+                data_iterator = tqdm(dataloader)
+            for inputs, _ in data_iterator:
+                
+                view1, view2 = augmentation(inputs.to(self.device))
                 loss = self._update(view1, view2)
                 _optimizer.zero_grad()
                 loss.backward()
                 _optimizer.step()
                 
                 self._update_target_network_params()
+                if use_tqdm:
+                    data_iterator.set_postfix(loss=loss.item())
+                running_loss += loss.item()
+            
+            _scheduler.step()
+            
+            avg_loss = running_loss / len(dataloader)
+            if use_tqdm:
+                epoch_iterator.set_postfix(avg_loss=avg_loss)
+                
+            if writer is not None:
+                writer.add_scalar("Loss/train", avg_loss, epoch)
+        
+        self.save_state_dict(save_path)
+    
+
+        writer.close()
                 
                 
     
@@ -135,8 +181,7 @@ class BYOL:
         torch.save({
             'online_network': self.online_network.state_dict(),
             'target_network': self.target_network.state_dict(),
-            'predictor': self.predictor.state_dict(),
-            'optimizer': self.optimizer.state_dict()
+            'predictor': self.predictor.state_dict()
         }, save_path)
     
     def load_state_dict(self, load_path='./byol.pt'):
@@ -144,7 +189,6 @@ class BYOL:
         self.online_network.load_state_dict(ckp['online_network'])
         self.target_network.load_state_dict(ckp['target_network'])
         self.predictor.load_state_dict(ckp['predictor'])
-        self.optimizer.load_state_dict(ckp['optimizer'])
             
         
         

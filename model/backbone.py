@@ -103,7 +103,7 @@ class AudioTinyNet(nn.Module):
 
 
 class ResNet_18(nn.Module):
-    def __init__(self, input_channels):
+    def __init__(self, input_channels, n_class):
         super(ResNet_18, self).__init__()
         self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, padding=3,
                                stride=2, bias=False)
@@ -113,6 +113,9 @@ class ResNet_18(nn.Module):
         self.res_blk2 = res_block(128, 256, stride=2)
         self.res_blk3 = res_block(256, 512, stride=2)
         self.res_blk4 = res_block(512, 512, stride=2)
+        self.ada_pool = nn.AdaptiveAvgPool2d((1,1))
+        self.flatten = nn.Flatten()
+        self.fc = nn.Linear(512, n_class)
             
             
     def forward(self, x):
@@ -122,6 +125,9 @@ class ResNet_18(nn.Module):
         x = self.res_blk2(x)
         x = self.res_blk3(x)
         x = self.res_blk4(x)
+        x = self.flatten(self.ada_pool(x))
+        x = self.fc(x)
+        
         return x
 
     
