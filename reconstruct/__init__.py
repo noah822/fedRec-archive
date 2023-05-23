@@ -1,1 +1,1 @@
-from .mvae import MVAE
+from .vae.vae import VAE

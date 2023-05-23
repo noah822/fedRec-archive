@@ -10,11 +10,23 @@ def train(
     augmentation,
     n_epoch,
     device,
+    merge_batch=True,
+    use_mp=False,
     use_tqdm=False,
     use_tensorboard=False,
     tensorboard_path=None,
     save_path=None
 ):
+    def _forward_impl(model, view1, view2, merge_batch):
+        if merge_batch:
+            x = torch.concat([view1, view2], dim=0)
+            x = model(x)
+            view1_embed, view2_embed = torch.split(x, x.shape[0] // 2, dim=0)
+        else:
+            view1_embed = model(view1)
+            view2_embed = model(view2)
+        return view1_embed, view2_embed
+            
     epoch_iterator = range(n_epoch)
     
     writer = None
@@ -35,9 +47,16 @@ def train(
         for inputs, _ in data_iterator:
             inputs = inputs.to(device)
             view1, view2 = augmentation(inputs)
-            x = torch.concat([view1, view2], dim=0)
-            x = model(x)
-            view1_embed, view2_embed = torch.split(x, x.shape[0] // 2, dim=0)
+            if use_mp:
+                with torch.cuda.amp.autocast():
+                    view1_embed, view2_embed = _forward_impl(
+                        model, view1, view2, merge_batch
+                    )
+            else:
+                view1_embed, view2_embed = _forward_impl(
+                        model, view1, view2, merge_batch
+                    )
+            
             loss = criterion(view1_embed, view2_embed)
             
             optimizer.zero_grad()
@@ -109,5 +128,75 @@ def linear_prob(
             
             
         
+def vanilla_trainer(
+    model, dataloader,
+    optimizer,
+    criterion,
+    n_epoch,
+    device, 
+    do_autoencode=True,
+    scheduler=None,
+    use_tqdm=True,
+    use_tensorboard=False,
+    tensorboard_path='./runs',
+    do_val=False,
+    val_freq=5,
+    valloader=None,
+    save_path=None
+    ):
+    epoch_iterator = range(n_epoch)
+    if use_tqdm:
+        epoch_iterator = trange(n_epoch)
+    if do_val:
+        assert valloader is not None
+    
+    writer = None
+    if use_tensorboard:
+        writer = SummaryWriter(log_dir=tensorboard_path)
+    
+    for epoch in epoch_iterator:
+        data_iterator = dataloader
+        running_loss = .0
+        if use_tqdm:
+            data_iterator = tqdm(data_iterator)
+        for inputs in data_iterator:
+            x, label = inputs
+            x = x.to(device); label = label.to(device)
+            target = x if do_autoencode else label
             
+            pred = model(x)
+            loss = criterion(pred, target)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            running_loss += loss.item()
+            if use_tqdm:
+                if do_val and (epoch + 1) % val_freq == 0:
+                    val_acc = val(model, valloader, device)
+                    data_iterator.set_postfix(loss=loss.item(), val_acc=val_acc)
+                    if writer is not None:
+                        writer.add_scalar('Loss/val', val_acc, epoch)
+                else:
+                    data_iterator.set_postfix(loss=loss.item())
         
+        avg_loss = running_loss / len(dataloader)
+        
+        if scheduler is not None:
+            scheduler.step()
+        
+        if writer is not None:
+            writer.add_scalar('Loss/train', avg_loss, epoch)
+        if use_tqdm:
+            epoch_iterator.set_postfix(avg_loss=avg_loss)
+        
+        if save_path is not None:
+            torch.save({
+                'model' : model.state_dict(),
+                'optimizer' : optimizer.state_dict(),
+                'scheduler' : scheduler.state_dict() if scheduler is not None else None 
+            }, save_path)
+            
+                
+        
+            
