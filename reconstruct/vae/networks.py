@@ -2,12 +2,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import torchvision
-import torchaudio
 import os
 from functools import reduce
-from .._utils.audio.preprocess import (
-    zero_pad
-)
+import numpy as np
 from .._utils.nn.autoencoder import (
     get_aligned_decoder
 )
@@ -132,7 +129,6 @@ mnist_audio_decoder = get_aligned_decoder(
     mnist_audio_decoder
 )
 
-
 class imageMNIST(Dataset):
     def __init__(self, dir_path, transform=None):
         super().__init__()
@@ -159,46 +155,30 @@ class imageMNIST(Dataset):
         if self.transform is not None:
             img = self.transform(img)
             return img, self.labels[index]
-        return img, self.labels[index]
+        return img.reshape(1, -1), self.labels[index]
 
 class audioMNIST(Dataset):
-    def __init__(self, dir_path, transform=None, trim=(13, 293)):
+    def __init__(self, dir_path):
         super().__init__()
         self.dir_path = dir_path
 
         self.filenames = []
         self.labels = []
         
-        if transform is None:
-            self.transform = torchaudio.transforms.MFCC(
-                48000, n_mfcc=13,
-                melkwargs={"n_fft": 400, "hop_length": 160, "n_mels": 13, "center": False},
-            )
-        else:
-            self.transform = transform
-        
-        self.trim = trim
-        
         
         # traverse dataset directory
-        for dir in os.scandir(dir_path):
-            if dir.is_dir():
-                for file in os.scandir(dir.path):
-                    self.filenames.append(file.path)
-                    # parse label 
-                    label = int(os.path.basename(file.path).split('_')[0])
-                    self.labels.append(label)
+        for file in os.scandir(dir_path):
+          self.filenames.append(file.path)
+          label = int(os.path.basename(file.path).split('_')[0])
+          self.labels.append(label)
     
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, index):
-        waveform, _ = torchaudio.load(self.filenames[index], normalize=True)
-        waveform = zero_pad(waveform)
-        mfcc = self.transform(waveform)
-        h, w = self.trim
-        mfcc = mfcc[:h, :w]
-        return mfcc, self.labels[index]
+        with open(self.filenames[index], 'rb') as f:
+          waveform = np.load(f)
+        return waveform, self.labels[index]
     
 class mmMNIST(Dataset):
     pass

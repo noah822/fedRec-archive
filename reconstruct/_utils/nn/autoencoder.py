@@ -27,7 +27,7 @@ class _aligned_decoder(nn.Module):
     
     
     '''
-        current implementation only supports one-depth nn.Sequential folding
+        current implementation only supports one-depth nn.Sequential unfolding
     '''
     def _requested_fwd(self, x):
         conv_layer_cnt = 0
@@ -39,7 +39,7 @@ class _aligned_decoder(nn.Module):
                 conv_layer_cnt += 1
                 
             # flatten out Sequential layer 
-            if isinstance(mod, nn.Sequential):
+            elif isinstance(mod, nn.Sequential):
                 for submod in mod.children():
                     if isinstance(submod, nn.ConvTranspose2d):
                         x = submod(x, output_size=self.requested_conv_shape[conv_layer_cnt][-2:])
