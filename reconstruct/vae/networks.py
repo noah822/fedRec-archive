@@ -99,26 +99,28 @@ mnist_img_linear_decoder = nn.Sequential(
 # do non-square convolutino over mfccs
 mnist_audio_encoder = nn.Sequential(
     _make_conv(
-        4, [1, 32, 64, 64, 64],
-        kernel_size=[4, 3, 3, 3],
-        stride=[2, 2, 1, 1],
+        6, [1, 64, 128, 256, 256, 512, 512],
+        kernel_size=[4, 4, 3, 3, 3, 3],
+        stride=[2, 2, 1, 1, 1, 1],
+        padding=[1, 1, 1, 1, 1, 1],
         use_bn=True
     ),
     nn.AdaptiveAvgPool2d((1,1)),
     nn.Flatten(),
-    _make_mlp(64, 128, 16)
+    _make_mlp(512, 256, 128)
 )
 
 
 mnist_audio_decoder = nn.Sequential(
-    nn.Linear(16, 64 * 27 * 3),
+    nn.Linear(128,  512 * 32 * 8),
     nn.ReLU(),
-    nn.Unflatten(-1, (64, 27, 3)),
+    nn.Unflatten(-1, (512, 32, 8)),
     _make_conv(
-        4, [64, 64, 64, 32, 1],
-        kernel_size=[3, 3, 3, 4],
-        stride=[1, 1, 2, 2],
-        use_bn=True, 
+        6, [512, 512, 256, 256, 128, 64, 1],
+        kernel_size=[3, 3, 3, 3, 4, 4],
+        stride=[1, 1, 1, 1, 2, 2],
+        padding=[1, 1, 1, 1, 1, 1],
+        use_bn=False, 
         use_deconv=True
     )
 )
@@ -210,10 +212,12 @@ def get_MNIST_dataloader(
 
 if __name__ == '__main__':
     x = torch.randn(32, 1, 128, 32)
+    
     net = nn.Sequential(
         mnist_audio_encoder, 
         mnist_audio_decoder
     )
-    res = net(x)
     # res = mnist_audio_encoder(x)
+    # res = mnist_audio_encoder(x)
+    res = net(x)
     print(res.shape)

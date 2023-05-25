@@ -34,6 +34,7 @@ class _aligned_decoder(nn.Module):
         
         for mod in self.decoder.children():
             if isinstance(mod, nn.ConvTranspose2d):
+                print(mod)
                 # get rid of batch and channel dimension
                 x = mod(x, output_size=self.requested_conv_shape[conv_layer_cnt][-2:])
                 conv_layer_cnt += 1
@@ -41,12 +42,14 @@ class _aligned_decoder(nn.Module):
             # flatten out Sequential layer 
             elif isinstance(mod, nn.Sequential):
                 for submod in mod.children():
+                    print(submod)
                     if isinstance(submod, nn.ConvTranspose2d):
                         x = submod(x, output_size=self.requested_conv_shape[conv_layer_cnt][-2:])
                         conv_layer_cnt += 1
                     else:
                         x = submod(x)
             else:
+                print(mod)
                 x = mod(x)
         return x
     
@@ -78,16 +81,16 @@ def get_aligned_decoder(input_shape, encoder, decoder):
 
 # if __name__ == '__main__':
     
-    # decoder = get_aligned_decoder(
-    #     (32, 1, 256, 64),
-    #     mnist_audio_encoder, 
-    #     mnist_audio_decoder
-    # )
+#     decoder = get_aligned_decoder(
+#         (32, 1, 256, 64),
+#         mnist_audio_encoder, 
+#         mnist_audio_decoder
+#     )
     
-    # print(decoder.requested_conv_shape)
+#     print(decoder.requested_conv_shape)
     
-    # # x = torch.randn(32, 1, 256, 64)
-    # latent = torch.randn(32, 16)
-    # rec = decoder(latent)
-    # print(rec.shape)
+#     # x = torch.randn(32, 1, 256, 64)
+#     latent = torch.randn(32, 16)
+#     rec = decoder(latent)
+#     print(rec.shape)
     

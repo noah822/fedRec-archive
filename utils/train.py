@@ -190,12 +190,12 @@ def vanilla_trainer(
         if use_tqdm:
             epoch_iterator.set_postfix(avg_loss=avg_loss)
         
-        if save_path is not None:
-            torch.save({
-                'model' : model.state_dict(),
-                'optimizer' : optimizer.state_dict(),
-                'scheduler' : scheduler.state_dict() if scheduler is not None else None 
-            }, save_path)
+    if save_path is not None:
+        torch.save({
+            'model' : model.state_dict(),
+            'optimizer' : optimizer.state_dict(),
+            'scheduler' : scheduler.state_dict() if scheduler is not None else None 
+        }, save_path)
             
                 
         

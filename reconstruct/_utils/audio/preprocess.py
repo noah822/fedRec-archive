@@ -8,6 +8,18 @@ from pathlib import Path
     https://github.com/musikalkemist/generating-sound-with-neural-networks 
 '''
 
+
+def min_max_denormalize(
+    array,
+    original_min, original_max,
+):
+    array = (array - array.min()) / (array.max() - array.min())
+    original_array = \
+        array * (original_max - original_min) + original_min
+    return original_array
+    
+    
+
 def zero_pad(waveform, sample_rate=22050, sec=0.74):
     # zero pad input waveform at both ends according to duaration specified by sec
     wave_len = waveform.shape[-1]
@@ -91,12 +103,13 @@ class LogSpectrogramExtractor:
         return self.extract(waveform)
     
     
-class MelSpectrogramExtractor:
+class LogMelSpectrogramExtractor:
     def __init__(self, sr=22050):
         self.sr = sr
     def extract(self, waveform):
-        melspec = librosa.feature.melspectrogram(waveform, sr=self.sr)
-        return melspec
+        melspec = librosa.feature.melspectrogram(waveform, sr=self.sr).astype(np.float32)
+        logmelspec = librosa.power_to_db(melspec)
+        return logmelspec
         
 
 class Padder:
@@ -132,9 +145,7 @@ class Pipeline:
     @property
     def extractor(self):
         if self._extractor is None:
-            return LogSpectrogramExtractor(
-                frame_size=512, hop_length=256
-            )
+            return LogMelSpectrogramExtractor()
         else:
             return self._extractor
     @property
