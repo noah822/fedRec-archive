@@ -93,13 +93,11 @@ mnist_img_linear_decoder = nn.Sequential(
     nn.Linear(512, 28*28),
     nn.Sigmoid()
 )
-
-
-
+        
 # do non-square convolutino over mfccs
 mnist_audio_encoder = nn.Sequential(
     _make_conv(
-        6, [1, 64, 128, 256, 256, 512, 512],
+        6, [1, 512, 512, 256, 256, 128, 64],
         kernel_size=[4, 4, 3, 3, 3, 3],
         stride=[2, 2, 1, 1, 1, 1],
         padding=[1, 1, 1, 1, 1, 1],
@@ -107,23 +105,24 @@ mnist_audio_encoder = nn.Sequential(
     ),
     nn.AdaptiveAvgPool2d((1,1)),
     nn.Flatten(),
-    _make_mlp(512, 256, 128)
+    _make_mlp(64, 256, 32)
 )
 
 
 mnist_audio_decoder = nn.Sequential(
-    nn.Linear(128,  512 * 32 * 8),
+    nn.Linear(32,  64 * 32 * 8),
     nn.ReLU(),
-    nn.Unflatten(-1, (512, 32, 8)),
+    nn.Unflatten(-1, (64, 32, 8)),
     _make_conv(
-        6, [512, 512, 256, 256, 128, 64, 1],
+        6, [64, 128, 256, 256, 512, 512, 1],
         kernel_size=[3, 3, 3, 3, 4, 4],
         stride=[1, 1, 1, 1, 2, 2],
         padding=[1, 1, 1, 1, 1, 1],
-        use_bn=False, 
+        use_bn=True, 
         use_deconv=True
     )
 )
+
 
 mnist_audio_decoder = get_aligned_decoder(
     (32, 1, 128, 32),
@@ -206,18 +205,4 @@ def get_MNIST_dataloader(
         assert csv_path is not None
     
     
-        
     
-    
-
-if __name__ == '__main__':
-    x = torch.randn(32, 1, 128, 32)
-    
-    net = nn.Sequential(
-        mnist_audio_encoder, 
-        mnist_audio_decoder
-    )
-    # res = mnist_audio_encoder(x)
-    # res = mnist_audio_encoder(x)
-    res = net(x)
-    print(res.shape)

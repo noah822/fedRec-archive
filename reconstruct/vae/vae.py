@@ -43,14 +43,12 @@ def reparameterize(mu, logvar):
 
 class VAE(nn.Module):
     def __init__(
-        self, encoder, decoder,
+        self,
         latent_dim,
         prior_mean=None, prior_logvar=None,
         rec_loss_fn='mse'
         ):
         super(VAE, self).__init__()
-        self.encoder = encoder
-        self.decoder = decoder
         
         self.latent_dim = latent_dim
         
@@ -68,7 +66,15 @@ class VAE(nn.Module):
             self.criterion = nn.MSELoss()
         elif rec_loss_fn == 'bce':
             self.criterion = nn.BCELoss(reduction='sum')
-            
+    
+    def encode(self, x):
+        raise NotImplementedError
+    
+    def decode(self, z):
+        return NotImplementedError
+    
+    
+    
     def sample(self, batch_size=10):
         z = torch.randn(batch_size, self.latent_dim)
         recon = torch.sigmoid(self.decoder(z))
@@ -92,7 +98,8 @@ class VAE(nn.Module):
     def _foward_impl(self, x):
         
         # generate params for p(z|x), approximated by q(z|x) -> KL divergence
-        mu, logvar = torch.split(self.encoder(x), self.latent_dim, dim=-1)
+        mu, logvar = self.encode(x)
+        
         z = self._reparameterize(mu, logvar)
         
         kl = kl_normal(
@@ -101,7 +108,7 @@ class VAE(nn.Module):
         ).sum()
         
         # compute p(x | z) -> reconstruction loss
-        x_hat = self.decoder(z)
+        x_hat = self.decode(z)
         
         if self.loss == 'bce':
             x_hat = torch.sigmoid(x_hat)
