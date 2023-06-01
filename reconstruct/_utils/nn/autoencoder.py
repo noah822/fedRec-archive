@@ -34,7 +34,6 @@ class _aligned_decoder(nn.Module):
         
         for mod in self.decoder.children():
             if isinstance(mod, nn.ConvTranspose2d):
-                print(mod)
                 # get rid of batch and channel dimension
                 x = mod(x, output_size=self.requested_conv_shape[conv_layer_cnt][-2:])
                 conv_layer_cnt += 1
@@ -42,14 +41,12 @@ class _aligned_decoder(nn.Module):
             # flatten out Sequential layer 
             elif isinstance(mod, nn.Sequential):
                 for submod in mod.children():
-                    print(submod)
                     if isinstance(submod, nn.ConvTranspose2d):
                         x = submod(x, output_size=self.requested_conv_shape[conv_layer_cnt][-2:])
                         conv_layer_cnt += 1
                     else:
                         x = submod(x)
             else:
-                print(mod)
                 x = mod(x)
         return x
     

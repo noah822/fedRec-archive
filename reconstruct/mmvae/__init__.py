@@ -1,4 +1,7 @@
 from .inference import (
     PoE, MoE
 )
-from .mmvae import MMVAE
+from .mmvae import (
+    MMVAE, 
+    DecoupledMMVAE
+)

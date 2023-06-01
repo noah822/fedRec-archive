@@ -1,5 +1,6 @@
 import torch 
 import torch.nn as nn
+from torch.distributions.normal import Normal
 
 
 def kl_normal(qm, qv, pm, pv):
@@ -45,12 +46,14 @@ class VAE(nn.Module):
     def __init__(
         self,
         latent_dim,
+        K=1,
         prior_mean=None, prior_logvar=None,
         rec_loss_fn='mse'
         ):
         super(VAE, self).__init__()
         
         self.latent_dim = latent_dim
+        self.K = K
         
         if prior_mean is None:
             prior_mean = nn.Parameter()
@@ -74,7 +77,6 @@ class VAE(nn.Module):
         return NotImplementedError
     
     
-    
     def sample(self, batch_size=10):
         z = torch.randn(batch_size, self.latent_dim)
         recon = torch.sigmoid(self.decoder(z))
@@ -91,8 +93,9 @@ class VAE(nn.Module):
             logvar: (batch, latent_dim)
         '''
         std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(mu) 
-        return mu + std * eps
+        _gaussian = Normal(mu, std)
+        z = _gaussian.rsample(torch.Size[self.K])
+        return z
     
     
     def _foward_impl(self, x):

@@ -165,7 +165,11 @@ def vanilla_trainer(
             target = x if do_autoencode else label
             
             pred = model(x)
-            loss = criterion(pred, target)
+            if criterion is not None:
+                loss = criterion(pred, target)
+            else:
+                loss = pred
+            
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

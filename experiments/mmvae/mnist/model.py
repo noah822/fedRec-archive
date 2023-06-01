@@ -1,11 +1,9 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-import torchvision
 import os
 from functools import reduce
 import numpy as np
-from .._utils.nn.autoencoder import (
+from reconstruct._utils.nn.autoencoder import (
     get_aligned_decoder
 )
 
@@ -130,79 +128,9 @@ mnist_audio_decoder = get_aligned_decoder(
     mnist_audio_decoder
 )
 
-class imageMNIST(Dataset):
-    def __init__(self, dir_path, transform=None):
-        super().__init__()
-        self.dir_path = dir_path
-
-        self.filenames = []
-        self.labels = []
-        self.transform = transform
-        
-        # traverse dataset directory
-        for dir in os.scandir(dir_path):
-            if dir.is_dir():
-                for file in os.scandir(dir.path):
-                    self.filenames.append(file.path)
-                    # parse label 
-                    label = int(os.path.basename(file.path).split('_')[0])
-                    self.labels.append(label)
-    
-    def __len__(self):
-        return len(self.labels)
-
-    def __getitem__(self, index):
-        img = torchvision.io.read_image(self.filenames[index]) / 255
-        if self.transform is not None:
-            img = self.transform(img)
-            return img, self.labels[index]
-        return img.reshape(1, -1), self.labels[index]
-
-class audioMNIST(Dataset):
-    def __init__(self, dir_path):
-        super().__init__()
-        self.dir_path = dir_path
-
-        self.filenames = []
-        self.labels = []
-        
-        
-        # traverse dataset directory
-        for file in os.scandir(dir_path):
-          self.filenames.append(file.path)
-          label = int(os.path.basename(file.path).split('_')[0])
-          self.labels.append(label)
-    
-    def __len__(self):
-        return len(self.labels)
-
-    def __getitem__(self, index):
-        with open(self.filenames[index], 'rb') as f:
-          waveform = np.load(f)
-        return waveform, self.labels[index]
-    
-class mmMNIST(Dataset):
-    pass
 
 
 
-
-def get_MNIST_dataloader(
-    path,
-    audio_only=False, image_only=False,
-    csv_path=None,
-    trainloader_config=None,
-    valloader_config=None,
-    train_val_split_ratio=0.7
-):
-    assert not (audio_only and image_only)
-    if audio_only:
-        pass
-    if image_only:
-        pass
-    
-    if not (audio_only or image_only):
-        assert csv_path is not None
     
     
     
