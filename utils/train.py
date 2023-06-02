@@ -1,7 +1,9 @@
+from typing import Any
 from tqdm.notebook import trange, tqdm
 from torch.utils.tensorboard import SummaryWriter
 import torch
 import torch.nn as nn
+from collections import OrderedDict
 
 def train(
     model, dataloader,
@@ -126,7 +128,33 @@ def linear_prob(
         avg_loss = running_loss / len(dataloader)
         epoch_iterator.set_postfix(avg_loss=avg_loss)
             
-            
+           
+class Prompt:
+    def __init__(self, keys):
+        self.prompt = OrderedDict()
+        self._keys = keys
+        for k in self._keys:
+            self.prompt[k] = .0
+    def __add__(self, rhs):
+        for k in self._keys:
+            self.prompt[k] += rhs[k]
+        return self
+    def __iadd__(self, rhs):
+        self = self + rhs
+        return self
+    def __truediv__(self, scalar):
+        for k in self._keys:
+            self.prompt[k] /= scalar
+        return self
+    
+    def __idiv__(self, scalar):
+        self = self / scalar
+        return self
+    def __repr__(self):
+        return self.prompt.__repr__()
+    
+    def __getitem__(self, key):
+        return self.prompt[key]
         
 def vanilla_trainer(
     model, dataloader,
@@ -134,21 +162,27 @@ def vanilla_trainer(
     criterion,
     n_epoch,
     device, 
+    unpack_and_forward: callable = None,
     do_autoencode=True,
     scheduler=None,
     use_tqdm=True,
+    custom_prompt=False,
     use_tensorboard=False,
+    tb_write_list: callable = None,
     tensorboard_path='./runs',
     do_val=False,
     val_freq=5,
     valloader=None,
     save_path=None
     ):
+    
     epoch_iterator = range(n_epoch)
     if use_tqdm:
         epoch_iterator = trange(n_epoch)
     if do_val:
         assert valloader is not None
+    if custom_prompt:
+        assert unpack_and_forward is not None
     
     writer = None
     if use_tensorboard:
@@ -156,43 +190,65 @@ def vanilla_trainer(
     
     for epoch in epoch_iterator:
         data_iterator = dataloader
-        running_loss = .0
         if use_tqdm:
             data_iterator = tqdm(data_iterator)
-        for inputs in data_iterator:
-            x, label = inputs
-            x = x.to(device); label = label.to(device)
-            target = x if do_autoencode else label
+        epoch_prompt = None
             
-            pred = model(x)
-            if criterion is not None:
-                loss = criterion(pred, target)
+        for inputs in data_iterator:
+            
+            if unpack_and_forward is not None:
+                prompt = None
+                if not custom_prompt:
+                    loss = unpack_and_forward(model, inputs)
+                    prompt = OrderedDict({'loss' : loss.item()})
+                else:
+                    loss, prompt = unpack_and_forward(model, inputs)
+                    
             else:
-                loss = pred
+                x, label = inputs
+                x = x.to(device); label = label.to(device)
+                target = x if do_autoencode else label
+                
+                pred = model(x)
+                if criterion is not None:
+                    loss = criterion(pred, target)
+                else:
+                    loss = pred
             
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             
-            running_loss += loss.item()
+            if epoch_prompt is None:
+                epoch_prompt = Prompt(prompt.keys())
+            
+            epoch_prompt += prompt
+            
             if use_tqdm:
                 if do_val and (epoch + 1) % val_freq == 0:
                     val_acc = val(model, valloader, device)
-                    data_iterator.set_postfix(loss=loss.item(), val_acc=val_acc)
+                    data_iterator.set_postfix(**prompt, val_acc=val_acc)
                     if writer is not None:
                         writer.add_scalar('Loss/val', val_acc, epoch)
                 else:
-                    data_iterator.set_postfix(loss=loss.item())
+                    data_iterator.set_postfix(**prompt)
         
-        avg_loss = running_loss / len(dataloader)
+        epoch_prompt = epoch_prompt / len(dataloader)
         
         if scheduler is not None:
             scheduler.step()
         
         if writer is not None:
-            writer.add_scalar('Loss/train', avg_loss, epoch)
+            if tb_write_list is not None:
+                assert unpack_and_forward is not None
+                assert use_tensorboard is True
+                for write_tuple in tb_write_list(epoch_prompt):
+                    title, value = write_tuple
+                    writer.add_scalar(title, value, epoch)
+            else:
+                writer.add_scalar('Loss/train', epoch_prompt['loss'], epoch)
         if use_tqdm:
-            epoch_iterator.set_postfix(avg_loss=avg_loss)
+            epoch_iterator.set_postfix(**epoch_prompt.prompt)
         
     if save_path is not None:
         torch.save({
@@ -203,4 +259,3 @@ def vanilla_trainer(
             
                 
         
-            

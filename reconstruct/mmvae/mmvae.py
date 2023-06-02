@@ -1,11 +1,13 @@
+from collections import OrderedDict
 import torch
+from torch import Tensor
 import torch.nn as nn
 from typing import Dict
 from ..vae.vae import (
     kl_standard_gaussian,
     reparameterize
 )
-
+from itertools import chain
 
 
 class MMVAE(nn.Module):
@@ -66,19 +68,57 @@ class DecoupledMMVAE(nn.Module):
             encoders: Dict[str, nn.Module],
             decoders: Dict[str, nn.Module],
             latent_dim,
-            alpha,
             score_fns: Dict[str, callable],
         ):
         super(DecoupledMMVAE, self).__init__()
-        self.encoders, self.decoders = encoders, decoders
+        self.encoders, self.decoders = nn.ModuleDict(encoders), nn.ModuleDict(decoders)
         self.latent_dim = latent_dim
-        self.alpha = alpha
         self.score_fns = score_fns
         
         
-    def forward(self, x):
+        self._config_mod_ae()
+        
+    @property
+    def trainable_components(self):
+        return [*self.encoders.values(), *self.decoders.values()]  
+    @property
+    def _mod_names(self):
+        return sorted(self.encoders.keys())
+    
+    
+    def generate(self, x: Dict[str, torch.Tensor], random_latent=False):
+        z = self._compute_joint_z(x, random_latent)
+        rec = {}
+        for mod in self._mod_names:
+            rec[mod] = self.decoders[mod](z)
+        return rec
+    
+    def _compute_joint_z(self, x, random_latent):
+        assert isinstance(x, dict)
+        param = []
+        for mod, mod_x in x.items():
+            # batched mu and logvar
+            mu, logvar = torch.split(
+                self.encoders[mod](mod_x), self.latent_dim, dim=-1
+            )
+            param.append((mu, logvar))
+
+        latents = []
+        if random_latent:
+            for mu, logvar in param:
+                latents.append(reparameterize(mu, logvar))
+        else:
+            for mu, _ in param:
+                latents.append(mu)
+        z = torch.cat([z.unsqueeze(0) for z in latents], dim=0) # (mod, batch, ...)
+
+        return torch.mean(z, dim=0)
+            
+            
+        
+    def forward(self, x, alpha):
         kl, rec = self._forward_impl(x)
-        nelbo = rec + self.alpha * kl
+        nelbo = rec + alpha * kl
         return nelbo, kl, rec
         
     def _forward_impl(self, inputs: Dict[str, torch.Tensor]):
@@ -89,33 +129,55 @@ class DecoupledMMVAE(nn.Module):
         - reconstruct each modality conditioned on all zs 
         '''
         latents = []
-        mod_names = sorted(inputs.keys())
         kl = .0
         
         # generate latents
-        for mod in mod_names:
+        for mod in self._mod_names:
             x = inputs[mod]
             param = self.encoders[mod](x)
             mu, logvar = torch.split(param, self.latent_dim, dim=-1)
-            kl += kl_standard_gaussian(mu, logvar)
+            kl += kl_standard_gaussian(mu, logvar, reduction='mean')
             latents.append(reparameterize(mu, logvar))
+        
         latents = torch.cat([z.unsqueeze(0) for z in latents], dim=0) # (mod, batch_size, latent_dim)
         
         # reconstruction
         rec = .0
-        for mod_a in mod_names:
+        for mod_a in self._mod_names:
             x = inputs[mod_a]
             for z in latents:
                 x_hat = self.decoders[mod_a](z)
-                rec += self.score_fns[mod_a](x, x_hat)
+                rec += self.score_fns[mod_a](x_hat, x)
         
         return kl, rec
+    
+    def _config_mod_ae(self):
+        for mod in self._mod_names:
+            ae = _mod_ae(
+                encoder=self.encoders[mod],
+                decoder=self.decoders[mod],
+                latent_dim =self.latent_dim 
+            )
+            setattr(self, f'{mod}_ae', ae)
 
-        
-        
     
+class _mod_ae(nn.Module):
+    def __init__(self,
+        encoder,
+        decoder,
+        latent_dim    
+    ):
+        super(_mod_ae, self).__init__()
+        self.encoder, self.decoder = encoder, decoder
+        self.latent_dim = latent_dim
         
-        
-    
-        
-        
+    def forward(self, x, random_latent=False):
+        mu, logvar = torch.split(
+            self.encoder(x), self.latent_dim, dim=-1
+        )
+        if random_latent:
+            z = reparameterize(mu, logvar)
+        else:
+            z = mu
+        x_hat = self.decoder(z)
+        return x_hat

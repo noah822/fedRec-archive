@@ -3,8 +3,6 @@ from typing import Iterable
 import numpy as np
 import librosa
 
-
-
 def draw_histogram(sample: Iterable, density=True, bins=None):
     if bins is None:
         bins = _choose_bin_number(sample)
@@ -39,5 +37,11 @@ def display_mel_as_wave(melspec, sr=22050, n_fft=2048, use_log=False):
     for w in waveforms:
         librosa.display.waveshow(w)
 
-
-
+def display_image(image: np.ndarray, channel_first=True, cmap='viridis'):
+    if len(image.shape) == 3:
+        if channel_first:
+            image = np.rollaxis(image, 0, image.ndim)
+        if image.shape[-1] == 1:
+            image = image.squeeze()
+            
+    plt.imshow(image, cmap=cmap)

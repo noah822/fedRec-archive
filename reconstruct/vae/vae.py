@@ -22,11 +22,16 @@ def kl_normal(qm, qv, pm, pv):
     kl = element_wise.sum(-1)
     return kl
 
-def kl_standard_gaussian(mu, logvar):
-    return kl_normal(
+def kl_standard_gaussian(mu, logvar, reduction='mean'):
+    assert reduction in ['sum', 'mean']
+    kl = kl_normal(
         mu, torch.exp(logvar),
         torch.zeros_like(mu), torch.ones_like(logvar)
     )
+    if reduction == 'sum':
+        return kl.sum()
+    if reduction == 'mean':
+        return kl.mean()
 
 def reparameterize(mu, logvar):
     '''
@@ -69,6 +74,8 @@ class VAE(nn.Module):
             self.criterion = nn.MSELoss()
         elif rec_loss_fn == 'bce':
             self.criterion = nn.BCELoss(reduction='sum')
+        else:
+            self.criterion = None
     
     def encode(self, x):
         raise NotImplementedError
