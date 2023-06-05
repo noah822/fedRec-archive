@@ -2,7 +2,7 @@ from collections import OrderedDict
 import torch
 from torch import Tensor
 import torch.nn as nn
-from typing import Dict
+from typing import Dict, Scalar
 from ..vae.vae import (
     kl_standard_gaussian,
     reparameterize
@@ -86,14 +86,14 @@ class DecoupledMMVAE(nn.Module):
         return sorted(self.encoders.keys())
     
     
-    def generate(self, x: Dict[str, torch.Tensor], random_latent=False):
-        z = self._compute_joint_z(x, random_latent)
+    def generate(self, x: Dict[str, torch.Tensor], random_latent=False, rsample=1):
+        z = self._compute_joint_z(x, random_latent, rsample)
         rec = {}
         for mod in self._mod_names:
             rec[mod] = self.decoders[mod](z)
         return rec
     
-    def _compute_joint_z(self, x, random_latent):
+    def _compute_joint_z(self, x, random_latent, rsample=1):
         assert isinstance(x, dict)
         param = []
         for mod, mod_x in x.items():
@@ -106,22 +106,41 @@ class DecoupledMMVAE(nn.Module):
         latents = []
         if random_latent:
             for mu, logvar in param:
-                latents.append(reparameterize(mu, logvar))
+                latents.append(reparameterize(mu, logvar, rsample))
         else:
             for mu, _ in param:
                 latents.append(mu)
         z = torch.cat([z.unsqueeze(0) for z in latents], dim=0) # (mod, batch, ...)
 
         return torch.mean(z, dim=0)
-            
-            
+    
+    def _set_rec_loss_penalty(self, penalty: Dict[str, float]):
+        if penalty is None:
+            penalty = {}
+            for mod in self._mod_names:
+                penalty[mod] = 1.
+        else:
+            for mod in self._mod_names:
+                if mod not in penalty.keys():
+                    penalty[mod] = 1.
+        return penalty
+                
         
-    def forward(self, x, alpha):
-        kl, rec = self._forward_impl(x)
+    def forward(self, x, alpha, rsample=1, mod_penalty: Dict[str, float]=None, verbose=False):
+        mod_penalty = self._set_rec_loss_penalty(mod_penalty)
+        
+        if verbose:
+            kl, rec, verbose_output = self._forward_impl(x, rsample, mod_penalty, verbose)
+        else:
+            kl, rec = self._forward_impl(x, rsample, mod_penalty, verbose)
         nelbo = rec + alpha * kl
-        return nelbo, kl, rec
         
-    def _forward_impl(self, inputs: Dict[str, torch.Tensor]):
+        if verbose:
+            return nelbo, kl, rec, verbose_output
+        else:
+            return nelbo, kl, rec
+        
+    def _forward_impl(self, inputs: Dict[str, torch.Tensor], rsample, mod_penalty, verbose=False):
         '''
         Pipeline:
         - generate latent repr for each modality: z1 = Enc1(x1); z2 = Enc2(x2)
@@ -137,19 +156,28 @@ class DecoupledMMVAE(nn.Module):
             param = self.encoders[mod](x)
             mu, logvar = torch.split(param, self.latent_dim, dim=-1)
             kl += kl_standard_gaussian(mu, logvar, reduction='mean')
-            latents.append(reparameterize(mu, logvar))
+            latents.append(reparameterize(mu, logvar, rsample))
         
         latents = torch.cat([z.unsqueeze(0) for z in latents], dim=0) # (mod, batch_size, latent_dim)
         
         # reconstruction
         rec = .0
+        verbose_rec_output = {}
         for mod_a in self._mod_names:
             x = inputs[mod_a]
-            for z in latents:
+            mod_rec = .0
+            for mod_b, z in zip(self._mod_names, latents):
                 x_hat = self.decoders[mod_a](z)
-                rec += self.score_fns[mod_a](x_hat, x)
+                loss_a_b = self.score_fns[mod_a](x_hat, x)
+                mod_rec += loss_a_b
+                if verbose:
+                    verbose_rec_output[f'{mod_a}|{mod_b}'] = loss_a_b
+            rec += mod_penalty[mod_a] * mod_rec
         
-        return kl, rec
+        if verbose:
+            return kl, rec, verbose_rec_output
+        else:
+            return kl, rec
     
     def _config_mod_ae(self):
         for mod in self._mod_names:

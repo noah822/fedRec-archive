@@ -33,7 +33,7 @@ def kl_standard_gaussian(mu, logvar, reduction='mean'):
     if reduction == 'mean':
         return kl.mean()
 
-def reparameterize(mu, logvar):
+def reparameterize(mu: torch.Tensor, logvar: torch.Tensor, rsample=1):
     '''
     Reparameterization trick to produce differentiable posterior
     mu: (batch, latent_dim)
@@ -41,9 +41,13 @@ def reparameterize(mu, logvar):
     '''
     
     std = torch.exp(0.5 * logvar)
+    
+    mu = mu.unsqueeze(1).repeat(1, rsample, 1)
+    std = std.unsqueeze(1).repeat(1, rsample, 1)
+    
     eps = torch.randn_like(mu)
     
-    return mu + std * eps
+    return (mu + std * eps).mean(dim=1)
 
 
 
