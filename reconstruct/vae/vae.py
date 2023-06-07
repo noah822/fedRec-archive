@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.distributions.normal import Normal
 
 
-def kl_normal(qm, qv, pm, pv):
+def kl_normal(qm, qv, pm, pv, reduction='sum'):
     """
     Computes the elem-wise KL divergence between two normal distributions KL(q || p) and
     sum over the last dimension
@@ -19,7 +19,13 @@ def kl_normal(qm, qv, pm, pv):
     """
     
     element_wise = 0.5 * (torch.log(pv) - torch.log(qv) + qv / pv + (qm - pm).pow(2) / pv - 1)
-    kl = element_wise.sum(-1)
+    
+    if reduction == 'sum':
+        batched_kl = element_wise.sum(-1)
+    if reduction == 'mean':
+        batched_kl = element_wise.mean(-1)
+    
+    kl = batched_kl.mean()
     return kl
 
 def kl_standard_gaussian(mu, logvar, reduction='mean'):
@@ -41,13 +47,9 @@ def reparameterize(mu: torch.Tensor, logvar: torch.Tensor, rsample=1):
     '''
     
     std = torch.exp(0.5 * logvar)
-    
-    mu = mu.unsqueeze(1).repeat(1, rsample, 1)
-    std = std.unsqueeze(1).repeat(1, rsample, 1)
-    
     eps = torch.randn_like(mu)
     
-    return (mu + std * eps).mean(dim=1)
+    return mu + std * eps
 
 
 

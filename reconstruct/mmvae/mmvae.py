@@ -7,6 +7,9 @@ from ..vae.vae import (
     kl_standard_gaussian,
     reparameterize
 )
+from .inference import (
+    MoE, PoE, MoPoE
+)
 from itertools import chain
 import torch.distributions as D
 
@@ -70,14 +73,18 @@ class DecoupledMMVAE(nn.Module):
             decoders: Dict[str, nn.Module],
             latent_dim,
             score_fns: Dict[str, callable],
+            device = 'cuda'
         ):
         super(DecoupledMMVAE, self).__init__()
         self.encoders, self.decoders = nn.ModuleDict(encoders), nn.ModuleDict(decoders)
         self.latent_dim = latent_dim
         self.score_fns = score_fns
         
+        self.device = device
+        
         
         self._config_mod_ae()
+        self._joint_inference = None
         
     @property
     def trainable_components(self):
@@ -96,6 +103,23 @@ class DecoupledMMVAE(nn.Module):
         _isotropic_normal = D.Normal(mu, std)
         return _isotropic_normal
     
+    
+    def _set_joint_inference(self, opt: str):
+        if self._joint_inference is not None:
+            return self._joint_inference
+        else:
+            if opt == 'MoE':
+                self._joint_inference = MoE()
+            elif opt == 'PoE':
+                self._joint_inference = PoE(eps=1e-8)
+            elif opt == 'MoPoE':
+                self._joint_inference = MoPoE()
+            else:
+                raise NotImplementedError
+        return self._joint_inference.to(self.device)
+    
+    
+
 
 
     def reconstruct(self, x: Dict[str, torch.Tensor], random_latent=False, rsample=1):
@@ -187,25 +211,67 @@ class DecoupledMMVAE(nn.Module):
                 if mod not in penalty.keys():
                     penalty[mod] = 1.
         return penalty
-                
+    
+            
         
-    def forward(self, x, alpha, rsample=1, mod_penalty: Dict[str, float]=None, verbose=False):
+    def forward(self,
+            x, alpha,
+            joint_posterior: str = 'MoE', 
+            mod_penalty: Dict[str, float]=None,
+            iw_cross_mod=True,
+            verbose=False
+        ):
+        
+
         mod_penalty = self._set_rec_loss_penalty(mod_penalty)
         
         if verbose:
-            kl, rec, verbose_output = self._forward_impl(x, rsample, mod_penalty, verbose)
+            kl, rec, verbose_output = \
+                self._forward_impl(
+                    x, joint_posterior,
+                    mod_penalty,
+                    iw_cross_mod,
+                    verbose
+                )
         else:
-            kl, rec = self._forward_impl(x, rsample, mod_penalty, verbose)
+            kl, rec = \
+                self._forward_impl(
+                    x, joint_posterior,
+                    mod_penalty,
+                    iw_cross_mod,
+                    verbose
+                )
         nelbo = rec + alpha * kl
         
         if verbose:
             return nelbo, kl, rec, verbose_output
         else:
             return nelbo, kl, rec
-        
+    
+    def _latent_posterior_impl(
+            self,
+            mu, logvar,
+            opt: str='MoE',
+        ):
+        '''
+        Args:
+        - mu: (mod, batch, latent_dim)
+        - logvar: (mod, batch, latent_dim)
+        Returns:
+        - latents: either in shape (mod, batch, ...) (MoE, stratified sampling) 
+                   or (batch, ...) (PoE, MoPoE)
+        - kl_divergence
+        '''
+        joint_inference = self._set_joint_inference(opt)
+        latents, kl = joint_inference(mu, logvar)
+        return latents, kl
+    
+  
+    
+    # TODO: rsample option might be deprecated 
     def _forward_impl(self,
             inputs: Dict[str, torch.Tensor],
-            rsample,
+            joint_posterior: str,
             mod_penalty,
             iw_cross_mod=True,
             verbose=False
@@ -223,6 +289,8 @@ class DecoupledMMVAE(nn.Module):
         '''
         latents = []
         posteriors = {}
+        mus = []
+        logvars = []
         kl = .0
         
         # generate latents
@@ -230,12 +298,22 @@ class DecoupledMMVAE(nn.Module):
             x = inputs[mod]
             param = self.encoders[mod](x)
             mu, logvar = torch.split(param, self.latent_dim, dim=-1)
-            posteriors[mod] = _normal_callable_interface(mu, logvar)
             
-            kl += kl_standard_gaussian(mu, logvar, reduction='mean')
-            latents.append(reparameterize(mu, logvar, rsample))
-        
-        latents = torch.cat([z.unsqueeze(0) for z in latents], dim=0) # (mod, batch_size, latent_dim)
+            if iw_cross_mod:
+                posteriors[mod] = _normal_callable_interface(mu, logvar)
+            
+            mus.append(mu), logvars.append(logvar)
+            
+            # kl += kl_standard_gaussian(mu, logvar, reduction='mean')
+            # latents.append(reparameterize(mu, logvar, rsample))
+            
+        # convert mus and 
+        mus = torch.stack(mus); logvars = torch.stack(logvars)
+        # latents = torch.cat([z.unsqueeze(0) for z in latents], dim=0) # (mod, batch_size, latent_dim)
+        latents, kl = self._latent_posterior_impl(
+            mus, logvars, 
+            joint_posterior
+        )
         
         post_score = None
         if iw_cross_mod:

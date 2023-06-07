@@ -3,61 +3,29 @@ import torch.nn as nn
 from typing import Dict
 from ..vae import (
     reparameterize, 
-    kl_normal,
-    kl_standard_gaussian
 )
+from .base import JointLatentInfer
 
-def _compute_kl(mu, logvar, mu_prior=None, var_prior=None):
-    if mu_prior is None:
-        mu_prior = torch.zeros_like(mu)
-    if var_prior is None:
-        var_prior = torch.ones_like(logvar)
-    return kl_normal(
-        mu, torch.exp(logvar),
-        mu_prior, var_prior
-    )
-
+'''
+ Subclass of JointLatentInfer
+ - should impl the abstract method `sample_latent()` defined in JointLatentInfer
+ - could overwrite default `compute_kl()` if necessary
+'''
 
 
 '''
     Product of Experts to aggregate per modality posterior estimate q(z|x_m)
 '''
-class PoE(nn.Module):
-    def __init__(self):
+class PoE(JointLatentInfer):
+    def __init__(self, eps=1e-8):
         super(PoE, self).__init__()
+        self.eps = eps
     
-    def foward(
-        self,
-        mu, 
-        logvar,
-        batch_first=True,
-        return_kl=True,
-        mu_prior=None,
-        var_prior=None,
-        eps=1e-8
-    ):
-        '''
-        Product of Experts forward implementation:
-        Args:
-        - mu: (*, n_mod, latent_dim) means of Gaussians from different modalities
-        - logvar: (*, n_mod, latent_dim) log of variance of Gaussians from different modalities
-        
-        Return:
-        - joint gaussian posterior
-        '''
-        joint_mu, joint_logvar = PoE._posterior_param(mu, logvar, eps)
+    def sample_latent(self, mu, logvar):
+        joint_mu, joint_logvar = PoE._posterior_param(mu, logvar, self.eps)
         z = reparameterize(joint_mu, joint_logvar)
-        
-        
-        if return_kl:
-            kl = _compute_kl(
-                joint_mu, torch.exp(logvar),
-                mu_prior, var_prior
-            )
-            return z, kl
+        return z
     
-        else:
-            return z
         
     @staticmethod
     def _posterior_param(mu, logvar, eps=1e-8):
@@ -71,31 +39,29 @@ class PoE(nn.Module):
         return joint_mu, joint_logvar
 
 '''
-Mixture of Experts
+    Mixture of Experts
+    used in Shi(2019): https://arxiv.org/abs/1911.03393
+    stratified sampling
 '''
-class MoE(nn.Module):
+class MoE(JointLatentInfer):
     def __init__(self):
         super(MoE, self).__init__()
         
-    def foward(
-        self,
-        mu, 
-        logvar,
-        batch_first=True,
-        return_kl=True,
-        mu_prior=None,
-        var_prior=None,
-    ):
-        z = reparameterize(mu, logvar).mean(dim=-2)
+    def sample_latent(self, mu, logvar):
+        z = reparameterize(mu, logvar)
+        return z
         
-        if return_kl:
-            kl = _compute_kl(
-                torch.flatten(mu, start_dim=-2, end_dim=-1),
-                torch.flatten(logvar, start_dim=-2, end_dim=-1),
-                mu_prior, var_prior
-            )
-            z, kl
-        else:
-            return z
+'''
+    Mixture of Product of Experts
+'''
+class MoPoE(JointLatentInfer):
+    def __init__(self):
+        super(MoPoE, self).__init__()
+    
+    def sample_latent(self, mu, logvar):
+        pass
+    
+    def compute_kl(self, mu, logvar, mu_prior, var_prior):
+        pass
     
         

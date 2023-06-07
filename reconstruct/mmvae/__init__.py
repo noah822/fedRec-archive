@@ -1,5 +1,5 @@
 from .inference import (
-    PoE, MoE
+    PoE, MoE, MoPoE
 )
 from .mmvae import (
     MMVAE, 
