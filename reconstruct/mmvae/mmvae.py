@@ -122,7 +122,7 @@ class DecoupledMMVAE(nn.Module):
 
 
 
-    def reconstruct(self, x: Dict[str, torch.Tensor], random_latent=False, rsample=1):
+    def reconstruct(self, x: Dict[str, torch.Tensor], random_latent=False):
         '''
             Take averge of q(x|z) if multiple modalities are present
         '''
@@ -133,7 +133,7 @@ class DecoupledMMVAE(nn.Module):
                 param = self.encoders[mod_i](mod_x)
                 mu, logvar = torch.split(param, self.latent_dim, dim=-1)
                 if random_latent:
-                    latent = reparameterize(mu, logvar,rsample)
+                    latent = reparameterize(mu, logvar)
                 else:
                     latent = mu
                 for mod_j in self._mod_names:
@@ -157,7 +157,7 @@ class DecoupledMMVAE(nn.Module):
     '''
         Potentially to be deprecated
     '''
-    def _compute_joint_z(self, x, random_latent, rsample=1):
+    def _compute_joint_z(self, x, random_latent):
         assert isinstance(x, dict)
         param = []
         for mod, mod_x in x.items():
@@ -170,7 +170,7 @@ class DecoupledMMVAE(nn.Module):
         latents = []
         if random_latent:
             for mu, logvar in param:
-                latents.append(reparameterize(mu, logvar, rsample))
+                latents.append(reparameterize(mu, logvar))
         else:
             for mu, _ in param:
                 latents.append(mu)
@@ -222,7 +222,6 @@ class DecoupledMMVAE(nn.Module):
             verbose=False
         ):
         
-
         mod_penalty = self._set_rec_loss_penalty(mod_penalty)
         
         if verbose:
@@ -329,9 +328,14 @@ class DecoupledMMVAE(nn.Module):
                 mod_penalty
             )
         else:
-            rec, verbose_rec_output = self._cross_mod_rec_vanilla(
-                inputs, latents, mod_penalty
-            )
+            if joint_posterior == 'PoE':
+                rec, verbose_rec_output = self._cross_mod_rec_powerset(
+                    inputs, latents, mod_penalty
+                )
+            else:
+                rec, verbose_rec_output = self._cross_mod_rec_vanilla(
+                    inputs, latents, mod_penalty
+                )
         
         if verbose:
             return kl, rec, verbose_rec_output
@@ -371,7 +375,7 @@ class DecoupledMMVAE(nn.Module):
                 
                 loss_i_j = self.score_fns[mod_j](x_hat, x)
                 if mod_i != mod_j:
-                    w = post_score[i][j] / (post_score[j][j].detach())
+                    w = post_score[i][j] / (post_score[j][j].detach() + 1e-8)
                 else:
                     w = 1.
                 if i == j:
@@ -389,6 +393,27 @@ class DecoupledMMVAE(nn.Module):
             x = inputs[mod_i]
             mod_rec = .0
             for mod_j, z in zip(self._mod_names, latents):
+                x_hat = self.decoders[mod_i](z)
+                loss_i_j = self.score_fns[mod_i](x_hat, x)
+                mod_rec += loss_i_j
+            
+                verbose_rec_output[f'{mod_i}|{mod_j}'] = loss_i_j.mean()
+            rec += mod_penalty[mod_i] * mod_rec
+
+        return rec, verbose_rec_output
+    
+    
+    def _cross_mod_rec_powerset(self, inputs, latents, mod_penalty):
+        '''
+            latents: [mod1; mod2; join ,...] 
+            dim0 is sorted according to mod names
+        '''
+        verbose_rec_output = {}
+        rec = .0
+        for mod_i in self._mod_names:
+            x = inputs[mod_i]
+            mod_rec = .0
+            for mod_j, z in zip([*self._mod_names, 'joint'], latents):
                 x_hat = self.decoders[mod_i](z)
                 loss_i_j = self.score_fns[mod_i](x_hat, x)
                 mod_rec += loss_i_j
