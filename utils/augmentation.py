@@ -64,4 +64,7 @@ class Augmentation(nn.Module):
         self.transform = nn.Sequential(*transforms)
         self.n_view = n_view
     def forward(self, x):
-        return [self.transform(x) for _ in range(self.n_view)]
+        if self.n_view == 1:
+            return self.transform(x)
+        else:
+            return [self.transform(x) for _ in range(self.n_view)]

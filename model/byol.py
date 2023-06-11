@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn as nn
 import copy
 from tqdm.notebook import tqdm, trange
 from torch.utils.tensorboard import SummaryWriter
@@ -9,7 +10,7 @@ from ._utils import (
     _remove_component
 )
 
-class BYOL:
+class BYOL(nn.Module):
     def __init__(self,
         backbone,
         inplanes,
@@ -19,7 +20,7 @@ class BYOL:
         proj_hidden_dim=None,
         user_proj=True,
         head_layer_name='fc',
-        prune_backbone=True,
+        prune_backbone=False,
         use_1d_bn=True,
         device='cpu'
     ):
@@ -30,7 +31,7 @@ class BYOL:
         
         projection: MLP with one hidden layer
         Args:
-        - inplanes: output dimension of bachbone
+        - inplanes: output dimension of backbone
         - proj_hidden_dim: hidden dimension of projection layer
         
         predictor: MLP with one hidden layer (proj_dim -> hidden -> proj_dim)
@@ -38,6 +39,7 @@ class BYOL:
         - pred_hidden_dim: hidden dimension of predictor layer
         
         '''
+        super(BYOL, self).__init__()
         if prune_backbone:
             assert head_layer_name is not None
             backbone = _remove_component(backbone, head_layer_name)
@@ -71,12 +73,14 @@ class BYOL:
                 nn.BatchNorm1d(hidden_dim),
                 nn.ReLU(),
                 nn.Linear(hidden_dim, out_dim),
+                nn.ReLU()
             )
         else:
             return nn.Sequential(
                 nn.Linear(in_dim, hidden_dim),
                 nn.ReLU(),
                 nn.Linear(hidden_dim, out_dim),
+                nn.ReLU()
             )
     
     @torch.no_grad()
@@ -89,75 +93,14 @@ class BYOL:
     
     @staticmethod
     def regression_loss(x, y):
-        x = F.normalize(x, dim=1)
-        y = F.normalize(y, dim=1)
+        x = F.normalize(x, dim=-1)
+        y = F.normalize(y, dim=-1)
         return 2 - 2 * (x * y).sum(dim=-1)
     
-        
-    def train(
-            self, augmentation, dataloader,
-            optimizer, optimizer_config,
-            scheduler, scheduler_config,
-            n_epoch,
-            save_path,
-            use_tqdm=False,
-            use_tensorboard=False,
-            tensorboard_path=None
-        ):
-        
-        writer = None
-        if use_tensorboard:
-            assert tensorboard_path is not None
-            writer = SummaryWriter(log_dir=tensorboard_path)
-        _optimizer = optimizer(
-            list(self.online_network.parameters()) + list(self.predictor.parameters()),
-            **optimizer_config
-        )
-        _scheduler = scheduler(
-            _optimizer, 
-            **scheduler_config
-        )
-        
-        self.optimizer = _optimizer
-        
-        epoch_iterator = range(n_epoch)
-        if use_tqdm:
-            epoch_iterator = trange(n_epoch)
-        
-        
-        for epoch in epoch_iterator:
-            running_loss = .0
-            data_iterator = dataloader
-            if use_tqdm:
-                data_iterator = tqdm(dataloader)
-            for inputs, _ in data_iterator:
-                
-                view1, view2 = augmentation(inputs.to(self.device))
-                loss = self._update(view1, view2)
-                _optimizer.zero_grad()
-                loss.backward()
-                _optimizer.step()
-                
-                self._update_target_network_params()
-                if use_tqdm:
-                    data_iterator.set_postfix(loss=loss.item())
-                running_loss += loss.item()
-            
-            _scheduler.step()
-            
-            avg_loss = running_loss / len(dataloader)
-            if use_tqdm:
-                epoch_iterator.set_postfix(avg_loss=avg_loss)
-                
-            if writer is not None:
-                writer.add_scalar("Loss/train", avg_loss, epoch)
-        
-        self.save_state_dict(save_path)
     
-
-        writer.close()
-                
-                
+    def forward(self, view1, view2):
+        loss = self._update(view1, view2)
+        return loss
     
     def _update(self, batch_view_1, batch_view_2):
         # compute query feature
@@ -176,20 +119,5 @@ class BYOL:
     @property
     def feature_extractor(self):
         return self.online_network
-    
-    def save_state_dict(self, save_path='./byol.pt'):
-        torch.save({
-            'online_network': self.online_network.state_dict(),
-            'target_network': self.target_network.state_dict(),
-            'predictor': self.predictor.state_dict()
-        }, save_path)
-    
-    def load_state_dict(self, load_path='./byol.pt'):
-        ckp = torch.load(load_path)
-        self.online_network.load_state_dict(ckp['online_network'])
-        self.target_network.load_state_dict(ckp['target_network'])
-        self.predictor.load_state_dict(ckp['predictor'])
-            
-        
         
         

@@ -155,7 +155,8 @@ class Prompt:
     
     def __getitem__(self, key):
         return self.prompt[key]
-        
+
+# TODO: custom writer
 def vanilla_trainer(
     model, dataloader,
     optimizer,
@@ -165,6 +166,7 @@ def vanilla_trainer(
     unpack_and_forward: callable = None,
     do_autoencode=True,
     scheduler=None,
+    post_bp_operation: callable = None,
     use_tqdm=True,
     custom_prompt=False,
     use_tensorboard=False,
@@ -218,6 +220,9 @@ def vanilla_trainer(
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            
+            if post_bp_operation is not None:
+                post_bp_operation(model, loss)
             
             if epoch_prompt is None:
                 epoch_prompt = Prompt(prompt.keys())
