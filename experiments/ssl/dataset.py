@@ -9,6 +9,7 @@ def get_simclr_transform(img_size=(32, 32), s=1):
     color_jitter = T.ColorJitter(
         0.8 * s, 0.8 * s, 0.8 * s, 0.2 * s
     )
+    gaussian_blur = T.GaussianBlur((3, 3), (1., 2.))
     # ImageNet statistics
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
@@ -16,6 +17,7 @@ def get_simclr_transform(img_size=(32, 32), s=1):
         T.RandomResizedCrop(size=img_size),
         T.RandomHorizontalFlip(),
         T.RandomApply([color_jitter], p=0.8),
+        T.RandomApply([gaussian_blur], p=0.2),
         T.RandomGrayscale(p=0.2),
         T.ToTensor(),
         T.Normalize(mean=mean, std=std)       

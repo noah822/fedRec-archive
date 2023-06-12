@@ -7,7 +7,7 @@ import matplotlib.cm as cm
 import numpy as np
 
 
-def display_tnse(extractor: nn.Module, dataloader, num_class=10, unpack: callable=None):
+def display_tsne(extractor: nn.Module, dataloader, num_class=10, unpack: callable=None):
     feature_bank, feature_labels = _get_feature_bank(extractor, dataloader, unpack)
     embeds = TSNE(n_components=2, learning_rate='auto', init='random').fit_transform(feature_bank)
     colors = cm.rainbow(np.linspace(0, 1))
@@ -15,7 +15,7 @@ def display_tnse(extractor: nn.Module, dataloader, num_class=10, unpack: callabl
     plt.figure(figsize=(10, 10))
     for idx, color in zip(range(num_class), colors):
         indices = np.where(feature_labels == idx)
-        plt.scatter(embeds[indices, 0], embeds[indices, 1], color=color, alpha=0.1, label=f'{idx}')
+        plt.scatter(embeds[indices, 0], embeds[indices, 1], color=color, label=f'{idx}')
     plt.legend()
     plt.show()
 

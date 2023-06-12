@@ -53,8 +53,15 @@ class InfoNCE(nn.Module):
         labels = torch.zeros(sample_size, dtype=torch.long).to(device)
         
         return logits_matrix, labels
+    
+    
+def _infer_device(x):
+    if isinstance(x, torch.Tensor):
+        return x.device
+    elif isinstance(x, nn.Module):
+        return next(x.parameters()).device
 
-def _off_diagnoal(x: torch.tensor, device, reduction='sum'):
+def _off_diagnoal(x: torch.Tensor, device, reduction='sum'):
     h, w = x.shape[-2:]
     assert h == w
     masked_x = x * (1 - torch.eye(h).to(device))
@@ -65,7 +72,7 @@ def _off_diagnoal(x: torch.tensor, device, reduction='sum'):
     elif reduction == 'mean':
         return masked_x.mean(-1)
 
-def _on_diagnoal(x: torch.tensor, device, reduction='sum'):
+def _on_diagnoal(x: torch.Tensor, device, reduction='sum'):
     h, w = x.shape[-2:]
     assert h == w
     masked_x = x * torch.eye(h).to(device)
@@ -91,7 +98,7 @@ class BarlowTwins:
         assert reduction in ['sum', 'mean', 'none']
         self.reduction = reduction
     
-    def __call__(self, view1: torch.tensor, view2: torch.tensor, eps):
+    def __call__(self, view1: torch.Tensor, view2: torch.Tensor, eps):
         '''
         Args:
         - view1/view2: (batch, embed_dim)
@@ -114,4 +121,42 @@ class BarlowTwins:
         
 
 class VicReg:
-    pass
+    def __init__(self, 
+        sim_coef,
+        std_coef,
+        cov_coef,
+        eps=1e-4             
+    ):
+        self.sim_coef, self.std_coef, self.cov_coef = sim_coef, std_coef, cov_coef
+        self.eps = eps
+    
+    def __call__(self, x, y):
+        '''
+        main reference: https://github.com/facebookresearch/vicreg/blob/main/main_vicreg.py
+    
+        Args:
+        - view1/view2: (batch, latent_dim)
+        '''
+        B, D = x.shape
+        sim_loss = F.mse_loss(x, y)
+        
+        x = x - x.mean(dim=0)
+        y = y - y.mean(dim=0)
+        
+        std_x = torch.sqrt(x.var(dim=0) + self.eps)
+        std_y = torch.sqrt(y.var(dim=0) + self.eps)
+        std_loss = torch.mean(F.relu(1-std_x)) / 2 + \
+                   torch.mean(F.relu(1-std_y)) / 2
+                   
+        cov_x = (x.T @ x) / B
+        cov_y = (y.T @ y) / B
+        cov_loss = (_off_diagnoal(cov_x.pow(2)) + _off_diagnoal(cov_y.pow(2))) / (2 * D)
+        
+        loss = self.sim_coef * sim_loss + \
+               self.std_coef * std_loss + \
+               self.cov_coef * cov_loss 
+        return loss 
+        
+        
+        
+        
