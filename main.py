@@ -1,22 +1,13 @@
-from fed import framework
+from fed.server import Server
+from fed.client import setup_client
+import flwr as fl
 
-class Client(framework.standard.Client):
-    def __init__(self):
-        super().__init__()
-        self.mvae = None
-        self.audio_autoencoder = None
-        self.visual_autoencoder = None
-    
-    def set_data(self, download):
-        generation_net_state_dict = download['generation']
-        autoencoder = download['autoencoder']
-    
-    def train(self):
-        pass
-        
+strategy = Server()
 
-
-class Server(framework.standard.Server):
-    def __init__(self, public):
-        super().__init__()
-
+fl.simulation.start_simulation(
+    strategy=strategy,
+    client_fn=setup_client,
+    num_clients=2,
+    client_resources={"num_cpus" : 2},
+    config=fl.server.ServerConfig(num_rounds=2)
+)

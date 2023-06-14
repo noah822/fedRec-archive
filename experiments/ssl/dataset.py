@@ -19,11 +19,9 @@ def get_simclr_transform(img_size=(32, 32), s=1):
         T.RandomApply([color_jitter], p=0.8),
         T.RandomApply([gaussian_blur], p=0.2),
         T.RandomGrayscale(p=0.2),
-        T.ToTensor(),
         T.Normalize(mean=mean, std=std)       
     ]
     test_transform = [
-        T.ToTensor(),
         T.Normalize(mean=mean, std=std)
     ]
     return train_transform, test_transform

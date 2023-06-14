@@ -1,7 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-from matplotlib.colors import LinearSegmentedColormap
+from typing import List, Any
+from itertools import chain
 
 '''
     Thin wrapper of matplotlib subplot class
@@ -32,32 +33,33 @@ def _prepare_canvas(layout):
     row, col = layout
     return GridCanvas(row, col)
 
-def _get_discrete_cmap(n: int, cmap:str='viridis', alpha=1.):
+def _get_discrete_cmap(n: int, cmap: str='rainbow', alpha=1.):
     '''
     reference: https://gist.github.com/jakevdp/91077b0cae40f8f8244a
     '''
     base_cmap = cm.get_cmap(cmap)
-    colors = base_cmap(np.linspace(0.2, 0.8, n), alpha=alpha)
+    colors = base_cmap(np.linspace(0, 1, n), alpha=alpha)
 
     return colors
 
+def _flatten_list(arr: List[List[Any]]):
+    return list(chain.from_iterable(arr))
 
 
 def draw_bin_grid(
-        X: np.ndarray, layout,
-        cmap='viridis',
+        X, layout,
+        cmap='rainbow',
         alpha=1.,
         title_prefix=None,
     ):
-    N = len(np.unique(X))
-    print(N)
+    N = len(np.unique(_flatten_list(X)))
     canvas = _prepare_canvas(layout)
     cmap = _get_discrete_cmap(N, cmap, alpha)
     for i, (x, subplot) in enumerate(zip(X, canvas)):
         _, _, pathces = subplot.hist(x)
         subplot.set(xlim=[0, N-1])
         if title_prefix is not None:
-            subplot.set_title(f'{title_prefix}_{i}')
+            subplot.set_title(f'{title_prefix} {i}')
         _set_bin_color(pathces, cmap)
     canvas.figure.tight_layout()
     plt.show()
