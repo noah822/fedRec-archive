@@ -2,7 +2,7 @@ import torch
 from io import BytesIO
 from typing import Dict, Any
 '''
-    Meidate through torch store/load api
+    Mediate through torch store/load api
 '''
 
 def serialize(data: Dict[str, Any]) -> bytes:

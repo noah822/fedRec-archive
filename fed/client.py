@@ -29,9 +29,12 @@ from utils.augmentation import Augmentation
 from model import BYOL
 
 
+from .utils.bind import register_method_hook
 
-def _tensor2np(t: torch.Tensor):
-    return t.detach().cpu().numpy()
+
+
+# def _tensor2np(t: torch.Tensor):
+#     return t.detach().cpu().numpy()
 
 def _get_default_aug():
     train_transform, test_transform = get_simclr_transform()
@@ -74,7 +77,14 @@ class Client(fl.client.Client):
             status=status,
             parameters=serialize(payload)
         )
-
+    
+    def _load_predictor(self):
+        pass
+    def _save_predictor(self):
+        pass
+    
+    
+    @register_method_hook(_load_predictor, _save_predictor)
     def fit(self, ins: FitIns) -> FitRes:
         # load parameters 
         self.set_parameters(ins)
@@ -100,7 +110,7 @@ class Client(fl.client.Client):
             metrics={}
         )
         return fit_res
-
+    
     def set_parameters(self, fit_ins: FitIns):
         ckp = deserialize(fit_ins.parameters)
         self.model.online_network.load_state_dict(ckp['online_encoder'])
@@ -163,6 +173,8 @@ def _get_client_loader(datasets: List[Dataset], config):
 
 
 NUM_CLIENTS = 10
+SEED = 123456
+
 dataset = torchvision.datasets.CIFAR10(
     './data', train=True, download=True,
     transform=lambda x: T.ToTensor()(x)
@@ -172,7 +184,8 @@ client_datasets = dirichelet_sampling(
     dataset,
     labels,
     NUM_CLIENTS,
-    alpha=5
+    alpha=5,
+    seed=SEED
 )
 
 dataloader_config = {

@@ -36,7 +36,7 @@ def _add_state_dict(
 
 def fedAvg(
         results: List[Tuple[OrderedDict, float]],
-        exclude_from_aggregate: List[str] = []
+        exclude_from_aggregate: List[str]=[]
 ) -> OrderedDict:
     num_examples_total = sum([num_examples for _, num_examples in results])
     weighted_weights = [

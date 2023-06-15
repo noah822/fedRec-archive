@@ -9,14 +9,12 @@ from flwr.common import (
     EvaluateRes,
     FitIns,
     FitRes,
-    Parameters,
-    Scalar,
+    Parameters
 )
 from flwr.server.client_manager import ClientManager
 from flwr.server.client_proxy import ClientProxy
 from .communicate import serialize, deserialize
 from .aggregate import *
-import torchvision 
 
 from experiments.ssl.model import get_backbone
 from model import BYOL
@@ -29,11 +27,11 @@ class Server(fl.server.strategy.Strategy):
         backbone = get_backbone('resnet18')
         model = BYOL(
             backbone,
-            512,
-            1024,
-            0.98,
-            256,
-            1024
+            inplanes=512,
+            pred_hidden_dim=1024,
+            epsilon=0.98,
+            proj_dim=256,
+            proj_hidden_dim=1024
         )
         payload = {
             'online_encoder' : model.online_network.state_dict(),
@@ -56,8 +54,6 @@ class Server(fl.server.strategy.Strategy):
                 client_manager: ClientManager
         ) -> List[Tuple[ClientProxy, EvaluateIns]]:
         pass
-
-
     
     def configure_fit(self, 
             server_round: int,
