@@ -1,3 +1,5 @@
+import os
+import multiprocessing as MP
 from typing import (
     Dict, Tuple, List
 )
@@ -30,6 +32,15 @@ from model import BYOL
 
 
 from .utils.bind import register_method_hook
+import time
+
+
+
+def _attempted_process_close(p, error_msg):
+    try:
+        p.close()
+    except:
+        print(error_msg)
 
 
 
@@ -52,7 +63,8 @@ class Client(fl.client.Client):
                 cid: int,
                 model: nn.Module,
                 trainloader, testloader=None,
-                augmentaion=None):
+                augmentaion=None,
+                state_dir='.client'):
         super(Client, self).__init__()
 
         self.cid = cid
@@ -67,6 +79,10 @@ class Client(fl.client.Client):
         self.trainloader, self.testloader = trainloader, testloader
         self.num_examples = len(self.trainloader.dataset)
 
+        self.state_dir = state_dir
+        if not os.path.isdir(state_dir):
+            os.makedirs(state_dir, exist_ok=True)
+
     def get_parameters(self, config: Dict[str, Scalar]):
         payload = {
             'online_encoder' : self.model.online_network.state_dict(),
@@ -78,36 +94,51 @@ class Client(fl.client.Client):
             parameters=serialize(payload)
         )
     
-    def _load_predictor(self):
-        pass
-    def _save_predictor(self):
-        pass
+    def _load_target_network(self):
+        filename = f'{self.state_dir}/{self.cid}.pt'
+        if not os.path.exists(filename):
+            return
+        ckp = torch.load(filename)
+        self.model.target_network.load_state_dict(ckp['target_net'])
+        
+    def _save_target_network(self):
+        filename = f'{self.state_dir}/{self.cid}.pt'
+        torch.save(
+            {'target_net' : self.model.target_network.state_dict()},
+            filename
+        )
+
     
-    
-    @register_method_hook(_load_predictor, _save_predictor)
+    @register_method_hook(_load_target_network, _save_target_network)
     def fit(self, ins: FitIns) -> FitRes:
         # load parameters 
         self.set_parameters(ins)
         epoch = ins.config['local_epoch']
         optimizer = self._set_optimizer(ins)
 
-        # self._train_impl(
-        #     epoch,
-        #     self.model,
-        #     optimizer
-        # )
+
+        loss = self._train_impl(
+            epoch,
+            self.model,
+            optimizer
+        )
 
         status = Status(code=Code.OK, message='Success')
         payload = serialize({
             'online_encoder' : self.model.online_network.state_dict(),
-            'predictor' : self.model.predictor.state_dict()
+            'predictor' : self.model.predictor.state_dict(),
         })
+        metrics = {
+            'cid' : int(self.cid),
+        }
+        for i, v in enumerate(loss):
+            metrics[f'epoch_{i}'] = v
 
         fit_res = FitRes(
             parameters=payload,
             status=status,
             num_examples=self.num_examples,
-            metrics={}
+            metrics=metrics
         )
         return fit_res
     
@@ -122,12 +153,13 @@ class Client(fl.client.Client):
     @property
     def device(self):
         return self._device
-
+    
     def to(self, device):
         self._device = device
         components = [self.model, self.augmentation]
         for x in components:
             x = x.to(device)
+        return self
     
     def _set_optimizer(self, ins: FitIns):
         optimizer = optim.SGD(
@@ -141,7 +173,9 @@ class Client(fl.client.Client):
                     model, optimizer, 
                     scheduler=None
                 ):
+        round_loss = []
         for _ in range(epoch):
+            running_loss = .0
             for inputs in self.trainloader:
                 x, _ = inputs
                 x = x.to(self.device)
@@ -152,68 +186,13 @@ class Client(fl.client.Client):
                 loss.backward()
                 optimizer.step()
 
-                if scheduler is not None:
-                    scheduler.step()
+                running_loss += loss.item()
 
+            if scheduler is not None:
+                scheduler.step()
+            
+            avg_loss = running_loss / len(self.trainloader)
+            round_loss.append(avg_loss)
 
+        return round_loss
 
-def _get_criterion(dataset):
-    criterion = []
-    for item in dataset:
-        _, label = item
-        criterion.append(label)
-    return criterion
-
-def _get_client_loader(datasets: List[Dataset], config):
-    loaders = []
-    for dataset in datasets:
-        loader = DataLoader(dataset, **config)
-        loaders.append(loader)
-    return loaders
-
-
-NUM_CLIENTS = 10
-SEED = 123456
-
-dataset = torchvision.datasets.CIFAR10(
-    './data', train=True, download=True,
-    transform=lambda x: T.ToTensor()(x)
-)
-labels = _get_criterion(dataset)
-client_datasets = dirichelet_sampling(
-    dataset,
-    labels,
-    NUM_CLIENTS,
-    alpha=5,
-    seed=SEED
-)
-
-dataloader_config = {
-    'batch_size' : 32,
-    'shuffle' : True
-}
-
-client_dataloaders = _get_client_loader(
-    client_datasets,
-    dataloader_config
-)
-
-
-def setup_client(cid: str):
-    dataloader = client_dataloaders[int(cid)]
-    augmentation, _ = _get_default_aug()
-    backbone = get_backbone('resnet18')
-    model = BYOL(
-        backbone,
-        512,
-        1024,
-        0.98,
-        256,
-        1024
-    )
-    client = Client(
-        cid, model,
-        dataloader,
-        augmentaion=augmentation
-    )
-    return client

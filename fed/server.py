@@ -20,8 +20,26 @@ from experiments.ssl.model import get_backbone
 from model import BYOL
 
 class Server(fl.server.strategy.Strategy):
-    def __init__(self):
+    def __init__(self,
+            num_client=10,
+            local_epoch=5,
+            tensorboard_writer=None,
+            cluster_size: int=5,    
+        ):
         super(Server, self).__init__()
+
+        self.num_client = num_client
+        self.local_epoch = local_epoch
+        self._writer = tensorboard_writer
+        self._use_tb = False
+        self.cluster_size = cluster_size
+        if self._writer is not None:
+            self._use_tb = True
+    
+    @property
+    def writer(self):
+        assert self._writer is not None
+        return self._writer
 
     def initialize_parameters(self, client_manager: ClientManager):
         backbone = get_backbone('resnet18')
@@ -60,7 +78,7 @@ class Server(fl.server.strategy.Strategy):
             parameters: Parameters,
             client_manager: ClientManager
         ) -> List[Tuple[ClientProxy, FitIns]]:
-        clients = client_manager.all()
+        clients = client_manager.sample(self.num_client)
 
         optimizer_config = {
             'lr' : 1e-3,
@@ -68,12 +86,12 @@ class Server(fl.server.strategy.Strategy):
         }
         config = {
             'init' : True if server_round == 0 else False,
-            'local_epoch' : 5,
+            'local_epoch' : self.local_epoch,
             **optimizer_config
         }
 
         fit_configs = []
-        for _, client in clients.items():
+        for client in clients:
             fit_configs.append(
                 (client, FitIns(parameters, config))
             )
@@ -89,13 +107,31 @@ class Server(fl.server.strategy.Strategy):
         predictors = []
 
         for _, result in results:
-            online_encoder, predictor = Server._unpack_client_params(result)
+            online_encoder, predictor = self._unpack_client_params(result)
+            cid, loss = self._unpack_client_loss(result)
             online_encoders.append(
                 (online_encoder, result.num_examples)
             )
             predictors.append(
                 (predictor, result.num_examples)
             )
+
+            if self._use_tb:
+                graph_idx, client_idx = self._route_client_index(cid)
+                start_epoch = (server_round-1) * self.local_epoch 
+                self._write_tensorboard(
+                    graph_idx, 
+                    client_idx,
+                    loss,
+                    start_epoch
+                )
+
+                self.writer.add_scalars(
+                    graph_idx,
+                    {client_idx : loss},
+                    (server_round-1) * self.local_epoch
+                )
+
 
         exclude_list = ['batch']
 
@@ -111,11 +147,37 @@ class Server(fl.server.strategy.Strategy):
             'predictor' : aggregated_predictor
         }
         return serialize(payload), {}
+    
 
+    
+        
 
+    def _write_tensorboard(self,
+        parent_index: str,
+        child_index: str,
+        data: List[float],
+        start_epoch: int
+    ):
+        for i, value in enumerate(data):
+            self.writer.add_scalars(
+                parent_index,
+                {child_index : value},
+                start_epoch + i
+            )
+        
+    def _route_client_index(self, cid: int) -> Tuple[str, str]:
+        parent_idx = 'Client/Loss'
+        cluster_idx = int(cid / self.cluster_size)
+        return f'{parent_idx}/{cluster_idx}', f'client_{cid}'
+        
+    
 
-    @staticmethod
-    def _unpack_client_params(fit_res: FitRes):
+    def _unpack_client_loss(self, fit_res: FitRes) -> Tuple[int, List[float]]:
+        loss = [fit_res.metrics[f'epoch_{i}'] for i in range(self.local_epoch)]
+        cid = fit_res.metrics['cid']
+        return (cid, loss)
+
+    def _unpack_client_params(self, fit_res: FitRes):
          ckp = deserialize(fit_res.parameters)
          return ckp['online_encoder'], ckp['predictor']
     
