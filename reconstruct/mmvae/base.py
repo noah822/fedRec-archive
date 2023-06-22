@@ -51,7 +51,7 @@ class JointLatentInfer(nn.Module):
         self,
         mu: torch.tensor,
         logvar: torch.tensor,
-        mu_prior, var_prior,
+        mu_prior=None, var_prior=None,
         batch_first=False,
         return_kl=True,
     ):

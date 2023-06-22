@@ -3,7 +3,7 @@ from .dataset import (
     get_MNIST_dataloader
 )
 
-from .model import (
-    mnist_audio_encoder, mnist_audio_decoder,
-    mnist_img_encoder, mnist_img_decoder
-)
+# from .model import (
+#     mnist_audio_encoder, mnist_audio_decoder,
+#     mnist_img_encoder, mnist_img_decoder
+# )

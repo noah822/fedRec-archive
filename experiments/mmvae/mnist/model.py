@@ -52,12 +52,18 @@ def _make_conv(
             
     return nn.Sequential(*convs)
 
-mnist_img_encoder = nn.Sequential(
-    _make_conv(3, [1, 4, 8, 16], kernel_size=[5, 5, 3], stride=[1, 1, 1]),
-    nn.AdaptiveAvgPool2d((1,1)),
-    nn.Flatten(),
-    _make_mlp(16, 128, 64)
-)
+
+def get_mnist_image_encoder(embed_dim=64):
+    mnist_img_encoder = nn.Sequential(
+        _make_conv(3, [1, 4, 8, 16], kernel_size=[5, 5, 3], stride=[1, 1, 1]),
+        nn.AdaptiveAvgPool2d((1,1)),
+        nn.Flatten(),
+        _make_mlp(16, 128, embed_dim)
+    )
+    return mnist_img_encoder
+
+
+
 
 mnist_img_decoder = nn.Sequential(
     nn.Linear(32, 3200),
@@ -91,21 +97,23 @@ mnist_img_linear_decoder = nn.Sequential(
     nn.Linear(512, 28*28),
     nn.Sigmoid()
 )
-        
-# do non-square convolutino over mfccs
-mnist_audio_encoder = nn.Sequential(
-    _make_conv(
-        6, [1, 512, 512, 256, 256, 128, 64],
-        kernel_size=[4, 4, 3, 3, 3, 3],
-        stride=[2, 2, 1, 1, 1, 1],
-        padding=[1, 1, 1, 1, 1, 1],
-        use_bn=True
-    ),
-    nn.AdaptiveAvgPool2d((1,1)),
-    nn.Flatten(),
-    _make_mlp(64, 256, 64)
-)
 
+def get_mnist_audio_encoder(embed_dim=64):
+        
+    # do non-square convolutino over mfccs
+    mnist_audio_encoder = nn.Sequential(
+        _make_conv(
+            6, [1, 512, 512, 256, 256, 128, 64],
+            kernel_size=[4, 4, 3, 3, 3, 3],
+            stride=[2, 2, 1, 1, 1, 1],
+            padding=[1, 1, 1, 1, 1, 1],
+            use_bn=True
+        ),
+        nn.AdaptiveAvgPool2d((1,1)),
+        nn.Flatten(),
+        _make_mlp(64, 256, embed_dim)
+    )
+    return mnist_audio_encoder
 
 mnist_audio_decoder = nn.Sequential(
     nn.Linear(32,  64 * 32 * 8),
@@ -122,11 +130,11 @@ mnist_audio_decoder = nn.Sequential(
 )
 
 
-mnist_audio_decoder = get_aligned_decoder(
-    (32, 1, 128, 32),
-    mnist_audio_encoder, 
-    mnist_audio_decoder
-)
+# mnist_audio_decoder = get_aligned_decoder(
+#     (32, 1, 128, 32),
+#     mnist_audio_encoder, 
+#     mnist_audio_decoder
+# )
 
 
 

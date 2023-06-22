@@ -1,7 +1,8 @@
 import os
 import multiprocessing as MP
 from typing import (
-    Dict, Tuple, List
+    Dict, Tuple, List,
+    Callable
 )
 import flwr as fl
 from flwr.common import (
@@ -15,44 +16,18 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision.transforms as T
-from torch.utils.data import Dataset, DataLoader
 
 import numpy as np
 import torchvision
 import copy
 
 from .communicate import serialize, deserialize
-from .utils.sampling import dirichelet_sampling
-
-from experiments.ssl.model import get_backbone
-from experiments.ssl.dataset import get_simclr_transform
-
-from utils.augmentation import Augmentation
-from model import BYOL
-
-
 from .utils.bind import register_method_hook
-import time
+from .utils._internal import _zippable, _iter_dict
+from .config import STATE
 
 
-
-def _attempted_process_close(p, error_msg):
-    try:
-        p.close()
-    except:
-        print(error_msg)
-
-
-
-# def _tensor2np(t: torch.Tensor):
-#     return t.detach().cpu().numpy()
-
-def _get_default_aug():
-    train_transform, test_transform = get_simclr_transform()
-    train_aug = Augmentation(train_transform, n_view=2)
-    test_aug = Augmentation(test_transform, n_view=2)
-    return train_aug, test_aug
-
+from reconstruct.mmvae import DecoupledMMVAE
 '''
     Try FedBYOL on Cifar10
 '''
@@ -61,20 +36,20 @@ class Client(fl.client.Client):
 
     def __init__(self, 
                 cid: int,
-                model: nn.Module,
+                mod_state: STATE,
+                model: nn.ModuleDict,
+                loss_fn: Callable,
                 trainloader, testloader=None,
-                augmentaion=None,
+                mmvae_config=None,
+                device='cuda',
                 state_dir='.client'):
         super(Client, self).__init__()
 
         self.cid = cid
         self.model = model
 
-        self._device = 'cpu'
-        if augmentaion is None:
-            self.augmentation = _get_default_aug()
-        else:
-            self.augmentation = augmentaion
+        self.mod_state = mod_state
+        self.device = device
 
         self.trainloader, self.testloader = trainloader, testloader
         self.num_examples = len(self.trainloader.dataset)
@@ -82,55 +57,70 @@ class Client(fl.client.Client):
         self.state_dir = state_dir
         if not os.path.isdir(state_dir):
             os.makedirs(state_dir, exist_ok=True)
+        
+        self.loss_fn = loss_fn
+        self.mmvae_config = mmvae_config
+        self.mmvae: DecoupledMMVAE = None
+        if self.mod_state != STATE.BOTH:
+            self.mmvae = self._load_mmvae()
+
+    def _load_mmvae(self):
+        mmave_param_list = {
+            'encoders' : self.mmvae_config['encoders']().to(self.device),
+            'decoders' : self.mmvae_config['decoders']().to(self.device),
+            'latent_dim' : self.mmvae_config['latent_dim'],
+            'score_fns' : self.mmvae_config['score_fns']().to(self.device)
+        }
+        mmvae = DecoupledMMVAE(**mmave_param_list, device=self.device)
+        return mmvae
+    
+    @property
+    def _available_mod(self):
+        mod_keys = []
+        if self.mod_state == STATE.AUDIO:
+            mod_keys.append('audio')
+        elif self.mod_state == STATE.IMAGE:
+            mod_keys.append('image')
+        else:
+            mod_keys.append('audio')
+            mod_keys.append('image')
+        return mod_keys
+
 
     def get_parameters(self, config: Dict[str, Scalar]):
-        payload = {
-            'online_encoder' : self.model.online_network.state_dict(),
-            'predictor' : self.model.predictor.state_dict(),
-        }
+        payload = self._export_payload()
         status = Status(code=Code.OK, message='Success')
         return GetParametersRes(
             status=status,
-            parameters=serialize(payload)
-        )
-    
-    def _load_target_network(self):
-        filename = f'{self.state_dir}/{self.cid}.pt'
-        if not os.path.exists(filename):
-            return
-        ckp = torch.load(filename)
-        self.model.target_network.load_state_dict(ckp['target_net'])
-        
-    def _save_target_network(self):
-        filename = f'{self.state_dir}/{self.cid}.pt'
-        torch.save(
-            {'target_net' : self.model.target_network.state_dict()},
-            filename
+            parameters=payload
         )
 
-    
-    @register_method_hook(_load_target_network, _save_target_network)
+    def _export_payload(self):
+        payload = {}
+        for k in self._available_mod:
+            payload[k] = self.model[k].state_dict()
+
+        return serialize(payload)
+
     def fit(self, ins: FitIns) -> FitRes:
         # load parameters 
         self.set_parameters(ins)
         epoch = ins.config['local_epoch']
         optimizer = self._set_optimizer(ins)
 
-
         loss = self._train_impl(
             epoch,
             self.model,
             optimizer
         )
-
         status = Status(code=Code.OK, message='Success')
-        payload = serialize({
-            'online_encoder' : self.model.online_network.state_dict(),
-            'predictor' : self.model.predictor.state_dict(),
-        })
+        payload = self._export_payload()
+
         metrics = {
             'cid' : int(self.cid),
+            'state' : self.mod_state.value
         }
+
         for i, v in enumerate(loss):
             metrics[f'epoch_{i}'] = v
 
@@ -144,19 +134,21 @@ class Client(fl.client.Client):
     
     def set_parameters(self, fit_ins: FitIns):
         ckp = deserialize(fit_ins.parameters)
-        self.model.online_network.load_state_dict(ckp['online_encoder'])
-        self.model.predictor.load_state_dict(ckp['predictor'])
-
-        if fit_ins.config['init']:
-            self.model.target_network = copy.deepcopy(self.model.online_network)
-    
-    @property
-    def device(self):
-        return self._device
+        zipped_model_dict = zip(
+            _iter_dict(self.model),
+            _iter_dict(ckp, exclude_list=['mmvae'])
+        )
+        for model, state_dict in zipped_model_dict:
+            model.load_state_dict(state_dict)
+        if self.mod_state is not STATE.BOTH:
+            self.mmvae.load_state_dict(ckp['mmvae'])
     
     def to(self, device):
         self._device = device
-        components = [self.model, self.augmentation]
+        components = [self.model]
+        if self.mmvae is not None:
+            components.append(self.mmvae)
+        
         for x in components:
             x = x.to(device)
         return self
@@ -177,10 +169,10 @@ class Client(fl.client.Client):
         for _ in range(epoch):
             running_loss = .0
             for inputs in self.trainloader:
-                x, _ = inputs
-                x = x.to(self.device)
-                view1, view2 = self.augmentation(x)
-                loss = model(view1, view2)
+                loss = self._fwd_branching(
+                    _iter_dict(model),
+                    _zippable(inputs),
+                )
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -195,4 +187,44 @@ class Client(fl.client.Client):
             round_loss.append(avg_loss)
 
         return round_loss
+    
+    @torch.no_grad()
+    def _generate_missing_mod(self, embed: torch.Tensor) -> torch.Tensor:
+        if self.mod_state == STATE.AUDIO:
+            generated_embed = self.mmvae.reconstruct({'audio' : embed})['image']
+        elif self.mod_state == STATE.IMAGE:
+            generated_embed = self.mmvae.reconstruct({'image' : embed})['audio']
+        return generated_embed.detach()
+
+
+    def _fwd_branching(self, models: Tuple[nn.Module], inputs: Tuple[torch.Tensor]):
+        out = []
+        for (model, x) in zip(models, inputs):
+            out.append(model(x))
+        '''
+            If there is modality missing,
+            generate the embedding conditioned on existing modality
+            using the mmvae model distributed by the server in this round
+        '''
+        if self.mod_state != STATE.BOTH:
+            # get possessed embed
+            possessed_embed = out[0]
+            generated_embed = self._generate_missing_mod(possessed_embed)
+
+            mod_x = possessed_embed; mod_y = generated_embed
+        else:
+            mod_x, mod_y = out
+        
+        loss = self.loss_fn(mod_x, mod_y)
+        return loss
+    
+    def _wrap_inputs(self, inputs: Tuple[torch.Tensor]):
+        wrapped_inputs = {}
+        for mod, x in zip(self._available_mod, inputs):
+            wrapped_inputs[mod] = x.to(self.device)
+        return wrapped_inputs
+
+        
+            
+            
 

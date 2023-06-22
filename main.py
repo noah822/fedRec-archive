@@ -1,7 +1,6 @@
 from fed.server import Server
 import flwr as fl
 from torch.utils.tensorboard import SummaryWriter
-import multiprocessing as MP
 
 from experiments.fed.dataset import (
     prepare_client_loader,
@@ -13,8 +12,13 @@ from fed.client import Client
 
 
 if __name__ == '__main__':
-    SEED = 123456
+    SEED = 42
     NUM_CLIENTS = 10
+
+    dataload_config = {
+        'batch_size' : 128,
+        'shuffle' : True
+    }
 
     client_dataloaders = prepare_client_loader(
         NUM_CLIENTS, SEED
@@ -39,13 +43,14 @@ if __name__ == '__main__':
         )
         return client
                         
-    # writer = SummaryWriter()
+    writer = SummaryWriter()
 
     strategy = Server(
         num_client=5,
         local_epoch=5,
-        # tensorboard_writer=writer,
-        # cluster_size=5
+        tensorboard_writer=writer,
+        cluster_size=5,
+        save_ckp_interval=5
     )
 
     fl.simulation.start_simulation(
@@ -56,4 +61,5 @@ if __name__ == '__main__':
         config=fl.server.ServerConfig(num_rounds=2),
         ray_init_args={"include_dashboard": True}
     )
+
 

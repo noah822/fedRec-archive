@@ -93,12 +93,13 @@ def _on_diagnoal(x: torch.Tensor, device, reduction='sum'):
         push off-diagnol elements to 0 -> decorrelated
         push on-diagonal elements to 1 
 '''
-class BarlowTwins:
+class BarlowTwins(nn.Module):
     def __init__(self, reduction='sum'):
+        super(BarlowTwins, self).__init__()
         assert reduction in ['sum', 'mean', 'none']
         self.reduction = reduction
     
-    def __call__(self, view1: torch.Tensor, view2: torch.Tensor, eps):
+    def forward(self, view1: torch.Tensor, view2: torch.Tensor, eps):
         '''
         Args:
         - view1/view2: (batch, embed_dim)
@@ -120,17 +121,18 @@ class BarlowTwins:
         
         
 
-class VicReg:
+class VicReg(nn.Module):
     def __init__(self, 
         sim_coef,
         std_coef,
         cov_coef,
         eps=1e-4             
     ):
+        super(VicReg, self).__init__()
         self.sim_coef, self.std_coef, self.cov_coef = sim_coef, std_coef, cov_coef
         self.eps = eps
     
-    def __call__(self, x, y):
+    def forward(self, x, y):
         '''
         main reference: https://github.com/facebookresearch/vicreg/blob/main/main_vicreg.py
     

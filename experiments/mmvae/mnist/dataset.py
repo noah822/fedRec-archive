@@ -137,7 +137,8 @@ def get_MNIST_dataloader(
     csv_path=None,
     trainloader_config=None,
     testloader_config=None,
-    train_val_split_ratio=None
+    train_val_split_ratio=None,
+    dataset_only=False
 ):
     assert not (audio_only and image_only)
     dataset = None
@@ -163,11 +164,15 @@ def get_MNIST_dataloader(
           train_size = len(dataset) * train_val_split_ratio
           test_size = len(dataset) - train_size
           trainset, testset = random_split(dataset, [train_size, test_size])
+          if dataset_only:
+              return trainset, testset
           
           trainloader = DataLoader(trainset, **trainloader_config)
           testloader = DataLoader(testset, **testloader_config)
           return trainloader, testloader
     else:
+          if dataset_only:
+              return dataset
           dataloader = DataLoader(dataset, **trainloader_config)
           return dataloader
         

@@ -108,9 +108,9 @@ class MoPoE(JointLatentInfer):
         super(MoPoE, self).__init__()
     
     def sample_latent(self, mu, logvar):
-        pass
+        ...
     
     def compute_kl(self, mu, logvar, mu_prior, var_prior):
-        pass
+        ...
     
         
