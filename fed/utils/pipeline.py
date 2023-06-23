@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 
 from typing import (
      Dict, Iterable, 
@@ -12,6 +12,7 @@ from utils.train import vanilla_trainer
 import torch.optim as optim
 
 from ._internal import _infer_device, _iter_dict
+import os
 
 class PairedFeatureBank(Dataset):
     '''
@@ -20,42 +21,65 @@ class PairedFeatureBank(Dataset):
     '''
     def __init__(self,
                  raw_dataset,
-                 extractors: Tuple[nn.Module]
+                 extractors: Tuple[nn.Module],
+                 device,
+                 dataloader_config=None,
+                 file_buffer='./.feature_bank'
                  ):
-            self.extractors = extractors
-            self.raw_dataset = raw_dataset
+          self.extractors = extractors
+          self.raw_dataset = raw_dataset
+          if dataloader_config is None:
+               dataloader_config = {
+                    'batch_size' : 128,
+                    'shuffle' : False,
+                    'num_workers' : 2 
+               }
+          raw_dataloader = DataLoader(raw_dataset, **dataloader_config)
 
-            self._fb = PairedFeatureBank.construct_fb_array(
-                 raw_dataset, 
-                 extractors, 
-                 to_tensor=False
-            )
+          self.file_buffer = file_buffer
+          if not os.path.isdir(file_buffer):
+               os.makedirs(file_buffer, exist_ok=True)
+
+          self._fb = PairedFeatureBank.construct_fb_array(
+               raw_dataloader, 
+               extractors,
+               device
+          )
     
     def __len__(self):
-         return len(self._fb)
+         return len(self.raw_dataset)
     def __getitem__(self, index):
-         return self._fb[index]
+         tensor_path = f'{self.file_buffer}/{index}.pt'
+         embed = torch.load(tensor_path)
+         return embed
 
     @staticmethod
     def construct_fb_array(
-                     dataset,
+                     dataloader,
                      extractors,
+                     device,
+                     file_buffer: str,
                      unpack: callable=None
                      ):
         
-        # device = _infer_device(dataset)
-        feature_bank = []
-        for inputs in dataset:
+        cnt = 0
+        for inputs in dataloader:
             instance_embed = []
             if unpack is not None:
                  inputs = unpack(inputs)
             for (model, x) in zip(extractors, inputs):
-                 instance_embed.append(model(x))
+                 model.eval()
+                 with torch.no_grad():
+                    instance_embed.append(model(x.to(device)))
             
-            feature_bank.append(
-                instance_embed
-            )
-        return feature_bank
+            # flatten out batched embeddings and save it into file buffer
+            # instance_embed: (mod, batch, latent_dim)
+            instance_embed = torch.stack(instance_embed).permute(1, 0, 2)
+            for embed in instance_embed:
+                 torch.save(embed, f'{file_buffer}/{cnt}.pt')
+                 cnt += 1
+            
+             
 
 
 class MMVAETrainer:
@@ -66,24 +90,34 @@ class MMVAETrainer:
      def __init__(self,
             mmvae,
             dataset: Iterable=None,
+            dataloader_config: Dict=None
             ):
-        self.dataset = dataset
-        self.mmvae = mmvae
+          self.dataset = dataset
+          self.mmvae = mmvae
+          if dataloader_config is None:
+               dataloader_config = {
+                    'batch_size' : 32,
+                    'shuffle' : True,
+                    'num_workers' : 2
+                    }
+          self.dataloader = DataLoader(self.dataset, **dataloader_config)
+        
 
      def train(self):
           epoch = 15
           optimizer = optim.Adam(self.mmvae.parameters(), lr=1e-3, weight_decay=1e-5)
           device = _infer_device(self.mmvae)
 
-          def _unpack_and_forward(model: DecoupledMMVAE, inputs):
-               audio_embed, image_embed = inputs
+          def _unpack_and_forward(model: DecoupledMMVAE, inputs: torch.Tensor):
+               inputs = inputs.permute(1,0,2)
+               audio_embed = inputs[0]; image_embed = inputs[1]
                x = {
                     'audio' : audio_embed,
                     'image' : image_embed
                }
                nelbo, kl, rec, verbose_output = model(
                     x, alpha=0.001,
-                    joint_postieror='MoE',
+                    joint_posterior='MoE',
                     iw_cross_mod=False,
                     verbose=True
                )
@@ -99,7 +133,7 @@ class MMVAETrainer:
                return nelbo, prompt
 
           vanilla_trainer(
-               self.mmvae, self.dataset,
+               self.mmvae, self.dataloader,
                optimizer, None,
                epoch, 
                device, 

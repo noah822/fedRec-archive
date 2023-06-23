@@ -54,9 +54,9 @@ class Client(fl.client.Client):
         self.trainloader, self.testloader = trainloader, testloader
         self.num_examples = len(self.trainloader.dataset)
 
-        self.state_dir = state_dir
-        if not os.path.isdir(state_dir):
-            os.makedirs(state_dir, exist_ok=True)
+        # self.state_dir = state_dir
+        # if not os.path.isdir(state_dir):
+        #     os.makedirs(state_dir, exist_ok=True)
         
         self.loss_fn = loss_fn
         self.mmvae_config = mmvae_config

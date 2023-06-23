@@ -18,10 +18,12 @@ def _infer_device(x):
 def _iter_dict(x: dict, exclude_list: List=None):
     if exclude_list is None:
         exclude_list = []
+    ordered_list = []
     for k in sorted(x.keys()):
         if k in exclude_list:
             continue
-        yield x[k]
+        ordered_list.append(x[k])
+    return ordered_list
     
 def _zippable(x):
     if isinstance(x, tuple) or \

@@ -34,7 +34,7 @@ from experiments.mmvae.mnist.model import (
     get_mnist_audio_encoder
 )
 
-from .utils._internal import _transpose_list, _check_keys
+from .utils._internal import _transpose_list, _check_keys, _iter_dict
 from .config import STATE
 
 
@@ -262,7 +262,8 @@ class Server(fl.server.strategy.Strategy):
         extractors = self._load_extractors()
         embeds_dataset = PairedFeatureBank(
             self.public_dataset,
-            extractors
+            _iter_dict(extractors),
+            self.device
         )
         trainer = MMVAETrainer(
             self._load_mmvae(),
@@ -277,8 +278,8 @@ class Server(fl.server.strategy.Strategy):
     @property
     def extractors(self) -> Tuple[nn.Module]:
         models = [
-            get_mnist_audio_encoder(),
-            get_mnist_image_encoder()
+            get_mnist_audio_encoder().to(self.device),
+            get_mnist_image_encoder().to(self.device)
         ]
         return models
 
@@ -312,18 +313,18 @@ class ParamQueue:
         self.num_module = num_module
 
         self._param_queues = [[] for _ in range(num_module)]
-    def push(self, param_list: List):
+    def push(self, client_res: List):
         '''
            push param_list produced by a client to the query
            if client misses some submodule, it should be explicitly notified by
            passing None
         '''
-        for param in param_list:
-            for idx, submodule in enumerate(param):
-                if submodule is None:
-                    continue
-                else:
-                    self._param_queues[idx].append(submodule)
+        param_list, num_examples = client_res
+        for idx, submodule in enumerate(param_list):
+            if submodule is None:
+                continue
+            else:
+                self._param_queues[idx].append((submodule, num_examples))
                 
     def pop(self):
         '''
@@ -335,6 +336,6 @@ class ParamQueue:
         assert idx < self.num_module
         return self._param_queues[idx]
     def __iter__(self):
-        return self._param_queues
+        return iter(self._param_queues)
 
         
