@@ -197,7 +197,7 @@ class Server(fl.server.strategy.Strategy):
             payload[key] = param
 
         # distribute trained MMVAE
-        payload['mmvae'] = fitted_mmvae if state != STATE.BOTH.value else None
+        payload['mmvae'] = fitted_mmvae
         
         if  self.save_ckp_interval is not None and \
             server_round % self.save_ckp_interval == 0:
