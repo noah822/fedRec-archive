@@ -24,10 +24,10 @@ import copy
 from .communicate import serialize, deserialize
 from .utils.bind import register_method_hook
 from .utils._internal import _zippable, _iter_dict
-from .config import STATE
-
+from .config import STATE, LossMode
 
 from reconstruct.mmvae import DecoupledMMVAE
+import random
 '''
     Try FedBYOL on Cifar10
 '''
@@ -42,6 +42,8 @@ class Client(fl.client.Client):
                 trainloader, testloader=None,
                 mmvae_config=None,
                 device='cuda',
+                online_augment=False,
+                augmentation=None,
                 state_dir='.client'):
         super(Client, self).__init__()
 
@@ -59,10 +61,23 @@ class Client(fl.client.Client):
         #     os.makedirs(state_dir, exist_ok=True)
         
         self.loss_fn = loss_fn
+
+        self.loss_mode : LossMode = LossMode.SelfContra 
+        self.eta: float = 1.0
+
         self.mmvae_config = mmvae_config
         self.mmvae: DecoupledMMVAE = None
         if self.mod_state != STATE.BOTH:
             self.mmvae = self._load_mmvae()
+        
+        self.online_augment = online_augment
+        self.augmentation = augmentation
+        if online_augment:
+            assert augmentation is not None
+        else:
+            if augmentation is not None:
+                self.online_augment = True
+                
 
     def _load_mmvae(self):
         mmave_param_list = {
@@ -73,7 +88,7 @@ class Client(fl.client.Client):
         }
         mmvae = DecoupledMMVAE(**mmave_param_list, device=self.device)
         return mmvae
-    
+
     @property
     def _available_mod(self):
         mod_keys = []
@@ -146,6 +161,8 @@ class Client(fl.client.Client):
     def to(self, device):
         self._device = device
         components = [self.model]
+        if self.online_augment:
+            components.append(self.augmentation)
         if self.mmvae is not None:
             components.append(self.mmvae)
         
@@ -165,6 +182,20 @@ class Client(fl.client.Client):
                     model, optimizer, 
                     scheduler=None
                 ):
+        '''
+            behavior of self.trainloader:
+            if use cross-mod-loss:
+                if both-mod-available:
+                    (mod_a, mod_b)
+                else:
+                    (mod_a, )
+            else: (hybrid-contra or self-contra)
+                (mod_view1, mod_view2)
+                if hyrid-contra:
+                    when computing cross-mod loss:
+                        random sample one of the views
+        '''
+
         round_loss = []
         for _ in range(epoch):
             running_loss = .0
@@ -188,6 +219,10 @@ class Client(fl.client.Client):
 
         return round_loss
     
+    @property
+    def _mod_iterator(self):
+        return _iter_dict(self.model)
+     
     @torch.no_grad()
     def _generate_missing_mod(self, embed: torch.Tensor) -> torch.Tensor:
         if self.mod_state == STATE.AUDIO:
@@ -195,29 +230,61 @@ class Client(fl.client.Client):
         elif self.mod_state == STATE.IMAGE:
             generated_embed = self.mmvae.reconstruct({'image' : embed})['audio']
         return generated_embed.detach()
+    
 
 
-    def _fwd_branching(self, models: Tuple[nn.Module], inputs: Tuple[torch.Tensor]):
-        out = []
-        for (model, x) in zip(models, inputs):
-            out.append(model(x))
+    def _fwd_branching(self, inputs: Tuple[torch.Tensor]):
         '''
             If there is modality missing,
             generate the embedding conditioned on existing modality
             using the mmvae model distributed by the server in this round
         '''
+        loss = .0
+        if self.loss_mode == LossMode.CrossContra:
+            loss = self._compute_cross_mod_loss(inputs)
+            # if do self-contrastive learning
+        elif self.loss_mode == LossMode.SelfContra:
+            loss = self._compute_self_mod_loss(inputs)
+        else: # self.loss_mode == HybridContra
+            selfcontra_loss = self._compute_self_mod_loss(inputs)
+            crosscontra_loss = self._compute_cross_mod_loss(
+                (random.choice(inputs), )
+            )
+            loss = selfcontra_loss + self.eta * crosscontra_loss
+        return loss
+    
+    def _compute_cross_mod_loss(self, inputs: Tuple[torch.Tensor]):
+        out = []
+        for (model, x) in zip(self._mod_iterator, inputs):
+            out.append(model(x))
+        
         if self.mod_state != STATE.BOTH:
-            # get possessed embed
             possessed_embed = out[0]
             generated_embed = self._generate_missing_mod(possessed_embed)
 
             mod_x = possessed_embed; mod_y = generated_embed
         else:
             mod_x, mod_y = out
-        
+
         loss = self.loss_fn(mod_x, mod_y)
         return loss
-    
+
+    def _compute_self_mod_loss(self, inputs: Tuple[torch.Tensor]):
+        single_mod_network = next(self._mod_iterator)
+        if self.online_augment:
+            view1, view2 = self.augmentation(inputs[0])
+        else:
+            view1, view2 = inputs
+        
+        multi_view = [view1, view2]
+        out = []
+        for view in multi_view:
+            out.append(single_mod_network(view))
+
+        view1_embed, view2_embed = out
+        loss = self.loss_fn(view1_embed, view2_embed)
+        return loss
+
     def _wrap_inputs(self, inputs: Tuple[torch.Tensor]):
         wrapped_inputs = {}
         for mod, x in zip(self._available_mod, inputs):

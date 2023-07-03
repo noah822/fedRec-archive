@@ -6,8 +6,8 @@ import torchaudio.functional as audioF
 import numpy as np
 
 import random
-from typing import List, Callable, Dict
-
+from typing import List, Callable, Dict, Any
+import os
 
 def get_default_img_transforms(input_shape, n_channel=3, s=1):
     # get a set of data augmentation transformations as described in the SimCLR paper.
@@ -22,48 +22,6 @@ def get_default_img_transforms(input_shape, n_channel=3, s=1):
     
     data_transforms = transforms.Compose(transforms)
     return data_transforms
-
-
-def multiview_dataset_wrapper(transforms, n_view=2, keep_original=False):
-    def _wrapper(dataset_cls):
-        class _multiview_dataset_wrapper(dataset_cls):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                self.transforms = transforms
-                self.n_view = n_view
-                self.keep_original = keep_original
-                
-                self.multiviewed = True
-                
-            def __len__(self):
-                return super().__len__()
-            
-            def __getitem__(self, index):
-                if not self.multiviewed:
-                    return super().__getitem__(index)
-                
-                data = super().__getitem__(index)
-                if len(data) > 1:
-                    data = data[0]
-                    
-                views = [None for _ in range(self.n_view)]
-                if self.keep_original:
-                    views[0] = data
-                    for i in range(1, self.n_view):
-                        views[i] = self.transforms(data)
-                else:
-                    for i in range(self.n_view):
-                        views[i] = self.transforms(data)
-                return views
-            
-            def unpack(self):
-                self.multiviewed = False
-            def pack(self):
-                self.multiviewed = True
-                
-        return _multiview_dataset_wrapper
-
-    return _wrapper
 
 '''
     Augmentations for audio(subclass nn.Module, can be loaded to GPUs)
@@ -102,22 +60,68 @@ class Reverb(nn.Module):
         if random.random() < self.p:
             # align shape of impulse, repeat along batch dimension if necessary
             batched_impulse = self._impulse.repeat(*waveform.shape[:-1],1)
-            print(batched_impulse.shape)
-            print(waveform.shape)
             rir_augmented = audioF.fftconvolve(waveform, batched_impulse)
         else:
             rir_augmented = waveform
         return rir_augmented
     
 
+# from torch_pitch_shift import semitones_to_ratio, pitch_shift
+    
+# class RandomPitchShift(nn.Module):
+#     def __init__(self, sr=22050, shift_semitones=None, p=0.5):
+#         super(RandomPitchShift, self).__init__()
+
+#         if shift_semitones is None:
+#             shift_semitones = [-2, -1, 1, 2]
+
+#         self._shift_ratio = [
+#             semitones_to_ratio(tone) for tone in shift_semitones
+#         ]
+
+#         self._shifter = lambda x, y: pitch_shift(x, y, sample_rate=sr)
+#         self.p = p
+    
+#     def forward(self, wave: torch.Tensor):
+#         if random.random() < self.p:
+#             shiftted_wave = self._shifter(wave, random.choice(self._shift_ratio))
+#         else:
+#             shiftted_wave = wave
+#         return shiftted_wave
+    
+
 
 from torch_audiomentations import Compose, Gain, PolarityInversion, AddBackgroundNoise
 
-def get_default_waveform_augmentation(sr, noise_path, impulse_path):
+def get_default_waveform_augmentation(
+        sr,
+        noise_path,
+        impulse_path,
+        add_bg_noise_config: Dict=None,
+        reverb_config: Dict=None,
+        speed_config: Dict=None,
+):
     rir_raw, sample_rate = torchaudio.load(impulse_path)
     rir = rir_raw[:, int(sample_rate * 1.01) : int(sample_rate * 1.3)]
     _default_impulse = rir / torch.norm(rir, p=2)
 
+
+    # set default config
+    if add_bg_noise_config is None:
+        add_bg_noise_config = {
+            'min_snr_in_db' : 5,
+            'max_snr_in_db' : 35,
+            'p' : 0.6
+        }
+    if reverb_config is None:
+        reverb_config = {
+            'p' : 0.7
+        }
+    if speed_config is None:
+        speed_config = {
+            'speed_factor' : [0.8, 1.2],
+            'p' : 0.7
+        }
     # Initialize augmentation callable
     base_augmentation = Compose(
         transforms=[
@@ -127,10 +131,8 @@ def get_default_waveform_augmentation(sr, noise_path, impulse_path):
                 p=0.5,
             ),
             PolarityInversion(p=0.6),
-            AddBackgroundNoise(background_paths=noise_path,
-                            min_snr_in_db=5,
-                            max_snr_in_db=35,
-                            p=0.6),
+            AddBackgroundNoise(
+            background_paths=noise_path,**add_bg_noise_config),
         ]
     )
     # thin wrapper of torch_audiomentation callable list 
@@ -141,12 +143,11 @@ def get_default_waveform_augmentation(sr, noise_path, impulse_path):
         base_augmentation,
         Reverb(
             impulse_sample=_default_impulse,
-            p=1
+            **reverb_config
         ),
         RandomSpeedChange(
-            sr=48000,
-            speed_factor=[0.8, 1.2, 1.4],
-            p=1
+            sr=sr,
+            **speed_config
         ),
     ]
     pipeline = _CallableChain(pipeline)
@@ -159,12 +160,24 @@ class _CallableChain(nn.Module):
         super(_CallableChain, self).__init__()
 
         # register as ModuleList
-        self.callable_list = nn.ModuleList(callable_list)
+
+        self.callable_list = callable_list
+        self._registered_module = \
+            _CallableChain._register_torch_module(callable_list)
     
     def forward(self, x):
         for f in self.callable_list:
             x = f(x)
         return x
+    
+    @staticmethod
+    def _register_torch_module(callable_list: List[Callable]):
+      registered = []
+      for fn in callable_list:
+        if isinstance(fn, nn.Module):
+          registered.append(fn)
+      return nn.ModuleList(registered)
+    
     
 
 class _KeywordFwdWrapper(nn.Module):
@@ -177,6 +190,27 @@ class _KeywordFwdWrapper(nn.Module):
         return self.fn(x, **self._kwargs)
 
 
+def static_augment(
+    file_iterator: str,
+    num_view: int,
+    pipeline: Callable[[str], Any],
+    saver: Callable[[Any, str], None],
+    save_path: str='./augmented',
+    verbose=False
+):
+    if not os.path.isdir(save_path):
+        os.makedirs(save_path, exist_ok=True)
+    
+    for filename in file_iterator:
+        for view in range(num_view):
+            augmented = pipeline(filename)
+            basename, extension = os.path.basename(filename).split('.')
+            saver(
+                augmented,
+                os.path.join(save_path, f'{basename}_view{view}.{extension}')
+            )
+            if verbose:
+                print(f'{filename} processed!')
 
 
 class Augmentation(nn.Module):

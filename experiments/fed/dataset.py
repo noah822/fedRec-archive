@@ -134,6 +134,8 @@ class HijackedDataset(Dataset):
             return hijacked[0]
         else: # if multiple modalities sampled, return list
             return hijacked
+        
+
 
 def sample_multi_states(size: int, states: List[Enum], seed):
     sampled = random.choices(states, k=size)
