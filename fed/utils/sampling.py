@@ -116,6 +116,7 @@ class Subset(Dataset):
         super(Subset, self).__init__()
         self.dataset = dataset
         self.idx_array = idx_array
+
     def __len__(self):
         return len(self.idx_array)
     def __getitem__(self, idx):
@@ -227,6 +228,7 @@ def _dirichelet_sampler(num_split: int, arr: np.ndarray, alpha):
     client_data_num = simplex * N; client_data_num = client_data_num.astype(int)
 
     res = []
+
     for i in range(num_split):
         updated_data_dict = []
         selected_data = []
@@ -235,7 +237,7 @@ def _dirichelet_sampler(num_split: int, arr: np.ndarray, alpha):
         num_per_label = [int(num_ * ratio) for ratio in non_iid_sample[i]]
         
         for idx, data_per_label in enumerate(data_dict):
-            sampling = np.random.randint(0, len(data_dict), num_per_label[idx])
+            sampling = np.random.randint(0, len(data_per_label), num_per_label[idx])
             selected_data.append(data_per_label[sampling])
             
             updated_data_dict.append(np.delete(data_per_label, sampling))
@@ -292,3 +294,32 @@ def dirichelet_sampling(
         )
     else:
         raise NotImplementedError
+        
+def _csv_reader(path: str) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    return df
+
+def uniform_draw_subset(
+    universe: Union[str, Dataset],
+    ratio: float, 
+    save_path: str=None
+) -> Union[None, Subset]:
+    '''
+        Uniformly draw subset from the universe
+        For csv file: uniformly draw row index
+        For torch dataset: uniformly draw sample indexn
+    '''
+    # csv file path is passed as parameter
+    if isinstance(universe, str):
+        assert save_path is not None
+        df = _csv_reader(universe)
+        selected_chunk, _ = _split_df(df, ratio)
+        selected_chunk.to_csv(save_path, index=False, header=df.columns)
+    
+    if isinstance(universe, Dataset):
+        dataset_size = len(universe)
+        selected_size = int(ratio * dataset_size)
+        index_arr = list(range(dataset_size))
+        random.shuffle(index_arr)
+        selected_subset = Subset(Dataset, index_arr[:selected_size])
+        return selected_subset

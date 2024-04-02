@@ -1,6 +1,6 @@
 import os
 import random
-from typing import Any
+from typing import Callable
 import torch
 import numpy as np
 import pandas as pd
@@ -10,6 +10,7 @@ from torch.utils.data import (
   random_split
 )
 import torchvision
+from pathlib import Path
 
 
 def _recursive_traverse(root_path):
@@ -54,82 +55,176 @@ def random_pairing(audio_path, image_path, seed=272, save_path='./mmMNIST.csv'):
       columns=['audio', 'image']
   )
   df.to_csv(save_path, index=False)
-  
+
+
+def _get_view_path(orig_path: str, view_folder: str, view_index: int) -> str:
+    orig_path: Path = Path(orig_path)
+    basename = orig_path.name.split('.')[0]
+    extension = orig_path.suffix
+    view_filename = f'{basename}_view{view_index}{extension}'
+    view_full_path = os.path.join(view_folder, view_filename)
+    return view_full_path
+
+def _extract_label(path: str) -> int:
+    stem = Path(path).stem.split('_')[0]
+    return int(stem)
+
   
 class imageMNIST(Dataset):
-    def __init__(self, dir_path, transform=None):
+    def __init__(self,
+                 dir_path: str=None,
+                 csv_path: str=None,
+                 augmentation: Callable=None,
+                 transform: Callable=None
+            ):
         super().__init__()
         self.dir_path = dir_path
 
         self.filenames = []
         self.labels = []
-        self.transform = transform
         
+        self.transform = transform
+
+        assert not ( (dir_path is None) and (csv_path is None) )
+        assert (dir_path is None) or (csv_path is None)
+                
         # traverse dataset directory
-        for dir in os.scandir(dir_path):
-            if dir.is_dir():
-                for file in os.scandir(dir.path):
-                    self.filenames.append(file.path)
-                    # parse label 
-                    label = int(os.path.basename(file.path).split('_')[0])
-                    self.labels.append(label)
+        if dir_path is not None:
+          self.filenames = _recursive_traverse(dir_path)
+          for file in self.filenames:
+              label = _extract_label(file)
+              self.labels.append(label)
+        
+        if csv_path is not None:
+            rowiter = pd.read_csv(csv_path).to_numpy().reshape(-1)
+            for file in rowiter:
+                self.filenames.append(file)
+                label = _extract_label(file)
+                self.labels.append(label)
+        
+        self.augmentation = augmentation
+        
     
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, index):
         img = torchvision.io.read_image(self.filenames[index]) / 255
+        
+
+        if self.augmentation is not None:
+            augmented_img = self.augmentation(img)
         if self.transform is not None:
             img = self.transform(img)
+            
+        if self.augmentation is not None:
+            return img, augmented_img
+        else:
             return img, self.labels[index]
-        return img.reshape(1, -1), self.labels[index]
 
 class audioMNIST(Dataset):
-    def __init__(self, dir_path):
+    def __init__(
+            self,
+            dir_path: str=None,
+            csv_path: str=None,
+            augment_folder: str=None,
+            num_view: int=2
+          ):
         super().__init__()
         self.dir_path = dir_path
 
         self.filenames = []
         self.labels = []
-        
+
+        self.augment_folder = augment_folder
+        self._offline_augment = augment_folder is not None
+
+        self.num_view = num_view
+
+
+        # if dir_path is provided, do recursive directory reverse
+        # elif csv_path is provided, 
+        assert not ( (dir_path is None) and (csv_path is None) )
+        assert (dir_path is None) or (csv_path is None)
+                
         # traverse dataset directory
-        for file in os.scandir(dir_path):
-          self.filenames.append(file.path)
-          label = int(os.path.basename(file.path).split('_')[0])
-          self.labels.append(label)
+        if dir_path is not None:
+          self.filenames = _recursive_traverse(dir_path)
+          for file in self.filenames:
+              label = _extract_label(file)
+              self.labels.append(label)
+        
+        if csv_path is not None:
+            rowiter = pd.read_csv(csv_path).to_numpy().reshape(-1)
+            for file in rowiter:
+                self.filenames.append(file)
+                label = _extract_label(file)
+                self.labels.append(label)
+
     
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, index):
-        with open(self.filenames[index], 'rb') as f:
+        filename = self.filenames[index]
+        label = self.labels[index]
+        with open(filename, 'rb') as f:
           waveform = np.load(f)
-        return waveform, self.labels[index]
+
+        if self._offline_augment:
+            sampled_view = random.choice(range(self.num_view))
+            view_path = _get_view_path(filename, self.augment_folder, sampled_view)
+            with open(view_path, 'rb') as f:
+                augmented_waveform = np.load(f)
+            return waveform, augmented_waveform
+        else:
+            return waveform, label
+
+import os
+  
     
 class mmMNIST(Dataset):
-    def __init__(self, audio_path, image_path, csv_path):
-          self.audio_path = audio_path
-          self.image_path = image_path
+    def __init__(
+            self, csv_path,
+            image_transform=None,
+            with_label=False
+          ):
           self.csv_path = csv_path
           
           self.files = pd.read_csv(csv_path).to_numpy()
-    
+          self.image_transform = image_transform
+          self.with_label = with_label
+
     def __len__(self):
           return len(self.files)
+    
         
     def __getitem__(self, index):
           audio_file, image_file = self.files[index]
           label = torch.tensor(int(os.path.basename(audio_file).split('_')[0]))
-          
+
           with open(audio_file, 'rb') as f:
             waveform = torch.tensor(np.load(f))
+
           img = torchvision.io.read_image(image_file) / 255
-          
-          return waveform, img, label
-          
+          if self.image_transform is not None:
+                img = self.image_transform(img)
+
+          if not self.with_label:
+              return waveform, img
+          else:
+              return waveform, img, label
 
 
+'''
+   Another csv related pipeline,
+  - each client read from their corresponding csv file
+  - get dataloader according three states specified:
+    a. audio-only w/o off-line augmentation
+    b. image-only w/o off-line augmentation  
+    c. both modalities presented
 
+'''
 
 def get_MNIST_dataloader(
     audio_only=False, image_only=False,
@@ -152,10 +247,7 @@ def get_MNIST_dataloader(
     
     if not (audio_only or image_only):
         assert csv_path is not None
-        dataset = mmMNIST(
-          audio_path, image_path,
-          csv_path
-        )
+        dataset = mmMNIST(csv_path)
         
     if train_val_split_ratio is not None:
           assert trainloader_config is not None \

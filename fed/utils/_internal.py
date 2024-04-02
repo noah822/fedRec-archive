@@ -1,3 +1,4 @@
+from functools import partial
 import torch
 import torch.nn as nn
 
@@ -40,4 +41,27 @@ def _transpose_list(x):
 '''
 def _check_keys(x: Dict, expected: List):
     return all([key in x.keys() for key in expected])
-    
+
+def _to_numpy(t):
+    return t.contiguous().detach().cpu().numpy()
+
+
+def pairwise_sim_metrics(x: torch.Tensor,
+                         y: torch.Tensor,
+                         metrics: str='Euclidean'):
+    '''
+    Args:
+    - x: of shape (n, d)
+    - y: of shape (m, d)
+
+    Return:
+    - pairwise distance of shape (n, m)
+    '''
+    broadcasted_pairwise_diff = x.unsqueeze(-2) - y.unsqueeze(0)
+    if metrics == 'Euclidean':
+        raise_fn = lambda x: x**2
+        aggre_fn = partial(torch.sum, dim=-1)
+    else:
+        raise NotImplementedError(f'{metrics} aggregation scheme is not supported')
+    pairwise_sim = aggre_fn(raise_fn(broadcasted_pairwise_diff))
+    return pairwise_sim

@@ -14,18 +14,100 @@ class InfoNCE(nn.Module):
     
     '''
     
-    def __init__(self, temperature, reduction='mean'):
+    def __init__(self,
+                 temperature: float=1.,
+                 alpha: float=1.,
+                 reduction='mean'):
         super(InfoNCE, self).__init__()
+
         self.reduction = reduction
-        self.temperature = temperature
+        self._alpha = alpha
+        self._overriding_alpha = None
+
+        self._temperature = temperature
+        self._overriding_temp = None
+
+    @property
+    def alpha(self):
+        if self._overriding_alpha is not None:
+            return self._overriding_alpha
+        elif self._alpha is not None:
+            return self._alpha
+        else:
+            return None
+    
+    @property
+    def temperature(self):
+        if self._overriding_temp is not None:
+            return self._overriding_temp
+        elif self._temperature is not None:
+            return self._temperature
+        else:
+            return None
+
         
-    def forward(self, view1, view2):
-        logits, labels = InfoNCE._forward_impl(view1, view2, self.temperature)
-        return F.cross_entropy(logits, labels)
+    def forward(self,
+                view1: torch.Tensor,
+                view2: torch.Tensor,
+                negative_aug1: torch.Tensor=None,
+                negative_aug2: torch.Tensor=None,
+                alpha: float=None,
+                temperature: float=None,
+                cross_view_only: bool=True
+                ):
+        '''
+            - negative_aug: extra negative samples used to compute contrastive loss 
+            Logit is computed as following:
+            if only one negative augmentation is specified:
+                [abused-notations] p -> postive; n -> negative; u -> augmented negative
+                    logit = <p, p> / (<p, n> + eta * <p, u>)
+            if two negative augmentation is specified:
+                [abused-notations]
+                p1, p2 -> paired postive from view1 & view2
+                n1, n2 -> negatives from view1 & view2
+                u1, u2 -> augmented negatives for view1 & view2
+                
+                logit[for p1] = <p1, p2> / (<p1, n2> + eta * <p1, u2>)
+                logit[for p2] = <p2, p1> / (<p2, n1> + eta * <p2, u1>)
+            - cross_view_only:
+              if set to true,
+              negative sample will only come from the other batch of sample, i.e other view
+              
+              usually used in cross-modal setting,
+              see CLIP paper https://arxiv.org/pdf/2103.00020.pdf
+
+        '''
+        self._overriding_alpha = alpha
+        self._overriding_temp = temperature
+
+        if cross_view_only:
+            loss = InfoNCE._inter_batch_fwd_impl(
+                view1, view2,
+                self.temperature,
+                negative_aug1, 
+                negative_aug2,
+                self.alpha
+            )
+        else: # intra-batch + inter-batch
+            loss = InfoNCE._default_forward_impl(
+                        view1, view2,
+                        self.temperature,
+                        negative_aug1,
+                        negative_aug2,
+                        self.alpha
+                    )
+        return loss
     
     
     @staticmethod
-    def _forward_impl(view1, view2, temperature):
+    def _default_forward_impl(
+            view1: torch.Tensor,
+            view2: torch.Tensor,
+            temperature: float,
+            negative_aug1: torch.Tensor=None,
+            negative_aug2: torch.Tensor=None,
+            alpha: float= .0
+        ):
         n_view = 2
         batch_size = view1.shape[0]
         device = view1.device
@@ -46,13 +128,63 @@ class InfoNCE(nn.Module):
         feature = torch.concat([view1, view2], dim=0)
         logits_matrix= (feature @ feature.T)[~mask]
         
-        positive = logits_matrix[labels.bool()].view(sample_size, -1)
+        positive = logits_matrix[labels.bool()].view(sample_size, -1) # (2N, ...)
         negative = logits_matrix[~labels.bool()].view(sample_size, -1)
-        
+
+        # use negative augmentation
+        if negative_aug1 is not None:
+            if negative_aug2 is None:
+                negative_aug2 = negative_aug1
+            
+            extra_penalty1 = view1 @ negative_aug2.T # (N, M)
+            extra_penalty2 = view2 @ negative_aug1.T # (N, M)
+
+            extra_penalty = torch.concat([extra_penalty1, extra_penalty2], dim=0)
+            negative = torch.concat([negative, alpha*extra_penalty], dim=-1)
+            
         logits_matrix = torch.concat([positive, negative], dim=-1) / temperature
         labels = torch.zeros(sample_size, dtype=torch.long).to(device)
+
+        loss = F.cross_entropy(logits_matrix + 1e-6, labels)
         
-        return logits_matrix, labels
+        return loss
+
+
+    
+    @staticmethod
+    def _inter_batch_fwd_impl(
+                    view1: torch.Tensor,
+                    view2: torch.Tensor,
+                    temperature: float=1.,
+                    negative_aug1: torch.Tensor=None,
+                    negative_aug2: torch.Tensor=None,
+                    alpha: float=1.
+                    ):
+            
+            device = view1.device
+            batch_size = view1.shape[0]
+            target = torch.arange(batch_size).to(device)
+            
+            normed_view1 = F.normalize(view1, dim=-1)
+            normed_view2 = F.normalize(view2, dim=-1)
+
+            # compute view1 logits  
+            _view2 = view2
+            if negative_aug2 is not None:
+                _view2 = torch.concat([view2, alpha * negative_aug2], dim=0)
+            view1_logits = (normed_view1 @ F.normalize(_view2, dim=-1).T) / temperature
+            view1_loss = F.cross_entropy(view1_logits + 1e-6, target)
+
+            # compute view2 logits
+            _view1 = view1
+            if negative_aug1 is not None:
+                _view1 = torch.concat([view1, alpha * negative_aug1], dim=0)
+            view2_logits = (normed_view2 @ F.normalize(_view1, dim=-1).T) / temperature
+            view2_loss = F.cross_entropy(view2_logits + 1e-6, target)
+
+            loss = (view1_loss + view2_loss) / 2
+
+            return loss
     
     
 def _infer_device(x):
@@ -61,7 +193,8 @@ def _infer_device(x):
     elif isinstance(x, nn.Module):
         return next(x.parameters()).device
 
-def _off_diagnoal(x: torch.Tensor, device, reduction='sum'):
+def _off_diagnoal(x: torch.Tensor, reduction='sum'):
+    device = _infer_device(x)
     h, w = x.shape[-2:]
     assert h == w
     masked_x = x * (1 - torch.eye(h).to(device))
@@ -72,7 +205,8 @@ def _off_diagnoal(x: torch.Tensor, device, reduction='sum'):
     elif reduction == 'mean':
         return masked_x.mean(-1)
 
-def _on_diagnoal(x: torch.Tensor, device, reduction='sum'):
+def _on_diagnoal(x: torch.Tensor, reduction='sum'):
+    device = _infer_device(x)
     h, w = x.shape[-2:]
     assert h == w
     masked_x = x * torch.eye(h).to(device)
@@ -126,7 +260,7 @@ class VicReg(nn.Module):
         sim_coef,
         std_coef,
         cov_coef,
-        eps=1e-4             
+        eps=1e-3             
     ):
         super(VicReg, self).__init__()
         self.sim_coef, self.std_coef, self.cov_coef = sim_coef, std_coef, cov_coef

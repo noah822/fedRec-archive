@@ -59,6 +59,7 @@ class JointLatentInfer(nn.Module):
          mu = mu.permute(1, 0, 2)
          logvar = logvar.permute(1, 0, 2)
      z = self.sample_latent(mu, logvar)
+    
      
      if return_kl:
          kl = self.compute_kl(

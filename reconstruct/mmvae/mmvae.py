@@ -219,8 +219,12 @@ class DecoupledMMVAE(nn.Module):
             joint_posterior: str = 'MoE', 
             mod_penalty: Dict[str, float]=None,
             iw_cross_mod=True,
-            verbose=False
+            verbose=False,
+            cross_loss_only=False,
+            self_loss_only=False,
         ):
+        assert (not cross_loss_only) or (not self_loss_only), \
+            "can not set both cross_loss and self_loss option to True"
         
         mod_penalty = self._set_rec_loss_penalty(mod_penalty)
         
@@ -230,7 +234,9 @@ class DecoupledMMVAE(nn.Module):
                     x, joint_posterior,
                     mod_penalty,
                     iw_cross_mod,
-                    verbose
+                    verbose,
+                    cross_loss_only,
+                    self_loss_only
                 )
         else:
             kl, rec = \
@@ -238,7 +244,9 @@ class DecoupledMMVAE(nn.Module):
                     x, joint_posterior,
                     mod_penalty,
                     iw_cross_mod,
-                    verbose
+                    verbose,
+                    cross_loss_only,
+                    self_loss_only
                 )
         nelbo = rec + alpha * kl
         
@@ -273,7 +281,9 @@ class DecoupledMMVAE(nn.Module):
             joint_posterior: str,
             mod_penalty,
             iw_cross_mod=True,
-            verbose=False
+            verbose=False,
+            cross_loss_only=False,
+            self_loss_only=False
         ):
         '''
         Pipeline:
@@ -295,8 +305,10 @@ class DecoupledMMVAE(nn.Module):
         # generate latents
         for mod in self._mod_names:
             x = inputs[mod]
+            assert not torch.isnan(x).any(), 'catch nan here'
             param = self.encoders[mod](x)
             mu, logvar = torch.split(param, self.latent_dim, dim=-1)
+            assert not torch.isnan(logvar).any(), f'catch nan here, {logvar}, {x}'
             
             if iw_cross_mod:
                 posteriors[mod] = _normal_callable_interface(mu, logvar)
@@ -334,7 +346,9 @@ class DecoupledMMVAE(nn.Module):
                 )
             else:
                 rec, verbose_rec_output = self._cross_mod_rec_vanilla(
-                    inputs, latents, mod_penalty
+                    inputs, latents, mod_penalty,
+                    cross_loss_only,
+                    self_loss_only
                 )
         
         if verbose:
@@ -385,7 +399,13 @@ class DecoupledMMVAE(nn.Module):
             rec += mod_rec * mod_penalty[mod_i]
         return rec, verbose_rec_output
     
-    def _cross_mod_rec_vanilla(self, inputs: Dict[str, torch.tensor], latents, mod_penalty):
+    def _cross_mod_rec_vanilla(self,
+                inputs: Dict[str, torch.tensor],
+                latents,
+                mod_penalty,
+                cross_loss_only=False,
+                self_loss_only=False
+            ):
         
         verbose_rec_output = {}
         rec = .0
@@ -393,11 +413,15 @@ class DecoupledMMVAE(nn.Module):
             x = inputs[mod_i]
             mod_rec = .0
             for mod_j, z in zip(self._mod_names, latents):
+                if self_loss_only and (mod_i != mod_j):
+                    continue
+                if cross_loss_only and mod_i == mod_j:
+                    continue
                 x_hat = self.decoders[mod_i](z)
                 loss_i_j = self.score_fns[mod_i](x_hat, x)
                 mod_rec += loss_i_j
             
-                verbose_rec_output[f'{mod_i}|{mod_j}'] = loss_i_j.mean()
+                verbose_rec_output[f'{mod_i}|{mod_j}'] = loss_i_j.mean().item()
             rec += mod_penalty[mod_i] * mod_rec
 
         return rec, verbose_rec_output

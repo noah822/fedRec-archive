@@ -118,9 +118,18 @@ def prepare_client_loader(
 
 # only output instance at given index specified of multimodal dataset
 class HijackedDataset(Dataset):
-    def __init__(self, origin_dataset, index: List[int]):
+    '''
+        Provide an interface for off-line augmentation    
+    '''
+    def __init__(self,
+                 origin_dataset, 
+                 index: List[int]):
         self.origin_dataset = origin_dataset
         self.index = index
+
+    def config_offline_augment():
+        pass
+    
     def __len__(self):
         return len(self.origin_dataset)
     def __getitem__(self, index):

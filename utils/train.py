@@ -4,6 +4,7 @@ from torch.utils.tensorboard import SummaryWriter
 import torch
 import torch.nn as nn
 from collections import OrderedDict
+from typing import List
 
 def train(
     model, dataloader,
@@ -82,14 +83,22 @@ def train(
         'optimizer' : optimizer.state_dict()
     }, save_path)
 
-def val(model, dataloader, device):
+def val(model, dataloader, device, unpack_and_forward=None):
     acc = .0
-    for input, label in dataloader:
-        input = input.to(device); label = label.to(device)
-        pred = model(input)
+    for inputs in dataloader:
+        if unpack_and_forward is None:  
+            x, label = inputs
+            x = x.to(device); label = label.to(device)
+            pred = model(x)
+        else:
+            pred = unpack_and_forward(model, inputs)
+            label = inputs[-1].to(device) 
         acc += (torch.argmax(pred, dim=-1) == label).sum()
     
     return acc / len(dataloader.dataset)
+
+
+import torch.nn.functional as F
 
 def linear_prob(
         backbone, head,
@@ -97,7 +106,9 @@ def linear_prob(
         optimizer, criterion,
         device,
         n_epoch,
-        use_tqdm=False         
+        unpack_and_forward=None,
+        use_tqdm=False,
+        normalize=False
     ):
     
     
@@ -113,20 +124,28 @@ def linear_prob(
             
         running_loss = .0
         for inputs in data_iterator:
-            x, y = inputs
-            x = x.to(device); y = y.to(device)
-            with torch.no_grad():
-                feature = backbone(x).detach()
-            pred = head(feature)
-            loss = criterion(pred, y)
+            if unpack_and_forward is None:
+                x, y = inputs
+                x = x.to(device); y = y.to(device)
+                with torch.no_grad():
+                    feature = backbone(x).detach()
+                    if normalize:
+                        feature = F.normalize(feature, dim=-1)
+                pred = head(feature)
+                loss = criterion(pred, y)
+            else:
+                loss = unpack_and_forward(backbone, inputs)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             
-            data_iterator.set_postfix(loss=loss.item())
+            if use_tqdm:
+                data_iterator.set_postfix(loss=loss.item())
             running_loss += loss.item()
         avg_loss = running_loss / len(dataloader)
-        epoch_iterator.set_postfix(avg_loss=avg_loss)
+    
+        if use_tqdm:
+            epoch_iterator.set_postfix(avg_loss=avg_loss)
             
            
 class Prompt:
@@ -261,6 +280,44 @@ def vanilla_trainer(
             'optimizer' : optimizer.state_dict(),
             'scheduler' : scheduler.state_dict() if scheduler is not None else None 
         }, save_path)
-            
+
+import random
+import numpy as np
+class CustomBatchSampler:
+    def __init__(self,
+                 num_sample: int,
+                 batch_size: int,
+                 drop_last: bool=True):
+        self.num_sample = num_sample
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+
+        self.src_idcs = np.array(range(num_sample))
+
+        # build shuffled batch idcs at init time
+        self.shuffle()
+    
+    def shuffle(self) -> List[int]:
+        # inplace shuffle
+        random.shuffle(self.src_idcs)
+        self.cur_idcs = self._proper_chunk(self.src_idcs)
+    
+    def _proper_chunk(self, idcs):
+        if self.drop_last:
+            integer_batch = int(self.num_sample / self.batch_size)
+        else:
+            integer_batch = int((self.num_sample + self.batch_size - 1) / self.batch_size)
+        batched_idcs = [
+            idcs[i*self.batch_size: (i+1)*self.batch_size] for i in range(integer_batch)
+        ]
+        return batched_idcs
+    @property
+    def drawed_batch(self):
+        return self.cur_idcs
+    def __iter__(self):
+        return iter(self.cur_idcs)
+    def __len__(self):
+        return len(self.cur_idcs)
+    
                 
         

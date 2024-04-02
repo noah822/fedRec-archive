@@ -105,6 +105,7 @@ class VAE(nn.Module):
             mu: (batch, latent_dim)
             logvar: (batch, latent_dim)
         '''
+        
         std = torch.exp(0.5 * logvar)
         _gaussian = Normal(mu, std)
         z = _gaussian.rsample(torch.Size[self.K])

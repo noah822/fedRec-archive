@@ -52,9 +52,22 @@ class InfoNCE(nn.Module):
         labels = torch.zeros(sample_size, dtype=torch.long).to(device)
         
         return logits_matrix, labels
+
+    
+
         
         
-        
-        
-        
+class StandardPipeline(nn.Module):
+    def __init__(self, 
+                 backbone,
+                 proj_head):
+        super(StandardPipeline, self).__init__()
+        self.backbone, self.proj_head = backbone, proj_head
+    def forward(self, x, return_embed=False):
+        embed = self.backbone(x)
+        projection = self.proj_head(embed)
+        if not return_embed:
+            return projection
+        else:
+            return projection, embed
         

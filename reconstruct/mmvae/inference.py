@@ -80,11 +80,14 @@ class PoE(JointLatentInfer):
         
         mu = torch.cat([prior_mu, mu], dim=0)
         logvar = torch.cat([prior_logvar, logvar], dim=0)
+        logvar = torch.clip(logvar, 1e-2, 8)
+        assert not torch.isnan(logvar).any(), 'catch nan in posterior'
         
         var = torch.exp(logvar) + eps
         T = 1 / var
         joint_mu = torch.sum(mu * T, dim=0) / torch.sum(T, dim=0)
         joint_logvar = torch.log(1 / torch.sum(T, dim=0))
+        joint_logvar = torch.clip(joint_logvar, 1e-2, 8)
         return joint_mu, joint_logvar
 
 '''
@@ -97,7 +100,8 @@ class MoE(JointLatentInfer):
         super(MoE, self).__init__()
         
     def sample_latent(self, mu, logvar):
-        z = reparameterize(mu, logvar)
+        assert not torch.isnan(logvar).any(), 'catch nan here'
+        z = reparameterize(mu, torch.clip(logvar, 1e-2, 1e2))
         return z
         
 '''

@@ -7,12 +7,20 @@ from reconstruct._utils.nn.autoencoder import (
     get_aligned_decoder
 )
 
-def _make_mlp(inplanes, hidden_dim, out_dim):
-    return nn.Sequential(
-        nn.Linear(inplanes, hidden_dim),
-        nn.ReLU(),
-        nn.Linear(hidden_dim, out_dim)
-    )
+def _make_mlp(inplanes, hidden_dim, out_dim, use_bn=False):
+    if use_bn:
+        return nn.Sequential(
+            nn.Linear(inplanes, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, out_dim)
+        )
+    else:
+        return nn.Sequential(
+            nn.Linear(inplanes, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, out_dim)
+        )
     
 def _make_conv(
     n_layer, n_channel,
@@ -55,7 +63,10 @@ def _make_conv(
 
 def get_mnist_image_encoder(embed_dim=64):
     mnist_img_encoder = nn.Sequential(
-        _make_conv(3, [1, 4, 8, 16], kernel_size=[5, 5, 3], stride=[1, 1, 1]),
+        _make_conv(3, [1, 4, 8, 16],
+                   kernel_size=[5, 5, 3],
+                   stride=[1, 1, 1],
+                   use_bn=True),
         nn.AdaptiveAvgPool2d((1,1)),
         nn.Flatten(),
         _make_mlp(16, 128, embed_dim)

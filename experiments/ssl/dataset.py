@@ -26,6 +26,21 @@ def get_simclr_transform(img_size=(32, 32), s=1):
     ]
     return train_transform, test_transform
 
+def get_mnist_transform(img_size=(28, 28)):
+    mean = (0.5, )
+    std = (0.5, )
+    train_transform = [
+        T.RandomResizedCrop(size=img_size, scale=(0.675, 0.675), antialias=True),
+        T.RandomHorizontalFlip(p=0.5),
+        T.RandomRotation(degrees=60),
+        T.RandomVerticalFlip(p=0.3),
+        T.Normalize(mean=mean, std=std)
+    ]
+    test_transform = [
+        T.Normalize(mean=mean, std=std)
+    ]
+    return train_transform, test_transform
+
 def get_dataloader(
     name,
     trainloader_config,
